@@ -11,9 +11,47 @@ const defaultMemoryFileLimit = 32 * 1024
 const defaultMemoryTotalLimit = 64 * 1024
 
 var memoryTemplates = map[string]string{
-	"user.md":    "# User Memory\n\n用于保存经用户明确批准的偏好与个人信息。\n\n",
-	"project.md": "# Project Memory\n\n用于保存经用户明确批准的项目背景与约束。\n\n",
-	"agent.md":   "# Agent Memory\n\n用于保存经用户明确批准的长期工作笔记。\n\n",
+	"user.md": "# User Memory (用户画像)\n\n" +
+		"<!-- INIT_REQUIRED -->\n" +
+		"> **记忆系统初始化向导**\n" +
+		"> 请向 ELIZA 描述关于你自己的信息，ELIZA 会整理并调用 `memory save` 写入。\n" +
+		"> 每条写入都会弹审批确认，由你逐次批准。\n" +
+		"> 完成全部初始化后，请告知 ELIZA，ELIZA 会删除此引导信息。\n" +
+		"> \n" +
+		"> 建议覆盖：回复风格偏好、角色背景、时区、常用工作区路径\n" +
+		"\n" +
+		"## 偏好 (Preferences)\n" +
+		"\n" +
+		"## 个人信息 (Personal Info)\n",
+
+	"project.md": "# Project Memory (项目约束)\n\n" +
+		"<!-- INIT_REQUIRED -->\n" +
+		"> **记忆系统初始化向导**\n" +
+		"> 请向 ELIZA 描述当前项目的背景、规范和约束。\n" +
+		"> 每条写入都会弹审批确认，由你逐次批准。\n" +
+		"> 完成全部初始化后，请告知 ELIZA，ELIZA 会删除此引导信息。\n" +
+		"> \n" +
+		"> 建议覆盖：项目目标、技术栈、命名规范、代码风格、部署方式、安全约束\n" +
+		"\n" +
+		"## 工作区 (Workspace)\n" +
+		"\n" +
+		"## 规范 (Conventions)\n" +
+		"\n" +
+		"## 约束 (Constraints)\n",
+
+	"agent.md": "# Agent Memory (工作笔记)\n\n" +
+		"<!-- INIT_REQUIRED -->\n" +
+		"> **记忆系统初始化向导**\n" +
+		"> 此文件由 ELIZA 在获得审批后自动维护。\n" +
+		"> 无需手动填写 — ELIZA 会在工作过程中遇到值得记录的经验或环境信息时，\n" +
+		"> 调用 `memory save` 写入（需你逐次审批）。\n" +
+		"> 初始化完成后，ELIZA 会删除此引导信息。\n" +
+		"\n" +
+		"## 经验 (Lessons Learned)\n" +
+		"\n" +
+		"## 环境 (Environment)\n" +
+		"\n" +
+		"## 知识 (Knowledge)\n",
 }
 
 func memoryDir() string { return filepath.Join(appBaseDir(), "memory") }
@@ -40,6 +78,21 @@ func ensureMemoryLayout() error {
 		}
 	}
 	return nil
+}
+
+// memoryInitStatus returns true if any memory file still has the
+// INIT_REQUIRED marker, indicating first-run initialization is needed.
+func memoryInitStatus() bool {
+	for _, name := range []string{"user.md", "project.md", "agent.md"} {
+		data, err := os.ReadFile(filepath.Join(memoryDir(), name))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(data), "<!-- INIT_REQUIRED -->") {
+			return true
+		}
+	}
+	return false
 }
 
 func loadMemory(filename string) string {

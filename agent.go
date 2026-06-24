@@ -118,6 +118,10 @@ func (a *Agent) RunInteractive() error {
 	if a.plan != nil && isActivePlan(a.plan.Status) {
 		a.ui.Status("WARN", "检测到可恢复计划 %s [%s]", a.plan.ID, a.plan.Status)
 	}
+	if memoryInitStatus() {
+		a.ui.Status("WARN", "记忆系统未初始化 — 首次启动向导")
+		a.ui.Status("WARN", "请向我描述你自己和项目背景，我会引导你完成初始化")
+	}
 	for {
 		a.ui.Prompt(a.registry.Mode(), a.roleName)
 		line, err := readTerminalLine()
