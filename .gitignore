@@ -1,0 +1,31 @@
+# ELIZA-AGENT
+# Built artifacts
+eliza
+eliza-linux-amd64
+eliza-linux-arm64
+eliza-windows-amd64.exe
+eliza-tui-preview
+
+# Runtime generated
+.env
+worklogs/
+plans/
+skills/
+memory/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+._*
+
+# Temp files from paste
+/tmp/eliza-input-*.txt
+
+# Go (if we ever add go.mod later)
+# go.sum

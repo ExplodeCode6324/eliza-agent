@@ -1,0 +1,30 @@
+{
+  "model": {
+    "name": "deepseek-chat",
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key": "ELIZA_API_KEY",
+    "context_window": 131072
+  },
+  "agent": {
+    "max_turns": 50,
+    "system_prompt": "你是 ELIZA，运行在 Linux 内网环境中的 AI Agent。\n你可以读取文件、写入文件、执行 Shell 命令。\n遵循以下规则：\n1. 危险操作（如 rm -rf、操作 /dev/sd* 等）需要用户确认后才能执行\n2. 读取文件时有长度限制，注意不要超出\n3. 每次完成任务后给出简洁的总结\n4. 回复使用中文，专业术语保留英文"
+  },
+  "dangerous_patterns": [
+    "rm\\s+-rf\\s+/",
+    "rm\\s+-rf\\s+\\*",
+    "dd\\s+if=",
+    "mkfs",
+    ">\\s*/dev/sd",
+    "chmod\\s+777",
+    "sudo\\s+rm"
+  ],
+  "worklog": {
+    "enabled": true,
+    "dir": "./worklogs"
+  },
+  "plugins": {
+    "browser": {
+      "chromium_dir": "./plugins/chromium"
+    }
+  }
+}
