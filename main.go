@@ -170,14 +170,14 @@ func runMain(args []string) int {
 	registry := NewToolRegistry(commandPolicy)
 	agent := NewAgent(cfg, llm, registry)
 	registry.confirmFn = func(command string) bool {
-		return agent.ui.Confirm(fmt.Sprintf("\n危险命令: %s\n确认执行? [y/N]: ", command))
+		return agent.approvalLoop(fmt.Sprintf("危险命令: %s", command))
 	}
 	registry.Register(&ReadFileTool{policy: filePolicy})
 	registry.Register(&WriteFileTool{policy: filePolicy})
 	registry.Register(&RunCommandTool{policy: commandPolicy, confirmFn: registry.confirmFn, timeout: time.Duration(cfg.Command.TimeoutSeconds) * time.Second, maxOutputBytes: cfg.Command.MaxOutputBytes})
 	registry.Register(&SkillListTool{})
 	registry.Register(&SkillViewTool{})
-	registry.Register(&MemoryTool{confirmFn: agent.ui.Confirm, allowWrite: opts.Query == "", worklog: agent.worklog})
+	registry.Register(&MemoryTool{confirmFn: agent.approvalLoop, allowWrite: opts.Query == "", worklog: agent.worklog})
 	configureSkills(cfg.Skills, agent.worklog)
 	scanSkills()
 	if envInfo.Generated {
@@ -451,9 +451,11 @@ func loadConfig(specifiedPath string) (*Config, error) {
 		DangerousPatterns: []string{
 			`rm\s+-rf\s+/`,
 			`rm\s+-rf\s+\*`,
+			`\brm\b`,
 			`dd\s+if=`,
 			`mkfs`,
 			`>\s*/dev/sd`,
+			`>\s*\S`,
 			`chmod\s+777`,
 			`sudo\s+rm`,
 		},
@@ -672,7 +674,7 @@ func defaultEnvContent() string {
 		"ELIZA_COMMAND_TIMEOUT=60\n" +
 		"ELIZA_COMMAND_MAX_OUTPUT=65536\n" +
 		"ELIZA_READONLY_COMMANDS=" + readonlyCommands + "\n" +
-		"ELIZA_DANGEROUS_PATTERNS=rm\\s+-rf\\s+/;rm\\s+-rf\\s+\\*;dd\\s+if=;mkfs;>\\s*/dev/sd;chmod\\s+777;sudo\\s+rm\n\n" +
+		"ELIZA_DANGEROUS_PATTERNS=rm\\s+-rf\\s+/;rm\\s+-rf\\s+\\*;\\brm\\b;dd\\s+if=;mkfs;>\\s*/dev/sd;>\\s*\\S;chmod\\s+777;sudo\\s+rm\n\n" +
 		"# Agent 单任务预算（不限制会话请求总数）\n" +
 		"ELIZA_AGENT_MAX_STEPS=50\n" +
 		"ELIZA_AGENT_MAX_TOOL_CALLS=100\n\n" +

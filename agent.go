@@ -452,10 +452,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []
 			} else if call.Func.Name == "write_file" {
 				path, _ := args["path"].(string)
 				content, _ := args["content"].(string)
-				prompt = fmt.Sprintf("WRITE_FILE 审批\n目标: %s\n精确内容:\n---\n%s\n---\n批准本次写入? [y/N]: ", path, content)
-				approved = a.ui.Confirm(prompt)
+				prompt = fmt.Sprintf("WRITE_FILE 写入 %s (%d 字节)", path, len(content))
+				approved = a.approvalLoop(prompt)
 			} else {
-				approved = a.registry.confirmFn(prompt)
+				approved = a.approvalLoop(fmt.Sprintf("危险命令: %s", prompt))
 			}
 			decision := "rejected"
 			if approved {
@@ -710,6 +710,37 @@ func editDistance(a, b string) int {
 		}
 	}
 	return row[len(right)]
+}
+
+// approvalLoop blocks until the user types /approve or /deny.
+// Used for run_command dangerous commands, write_file, and memory modifications.
+// Non-interactive mode (e.g. -q flag) always returns false.
+func (a *Agent) approvalLoop(prompt string) bool {
+	if !a.interactive {
+		return false
+	}
+	a.ui.Status("BLOCKED", "%s", prompt)
+	a.ui.Status("BLOCKED", "输入 /approve 确认执行，/deny 拒绝")
+
+	for {
+		line, err := readTerminalLine()
+		if err != nil && line == "" {
+			return false
+		}
+		line = strings.TrimSpace(line)
+		switch strings.ToLower(line) {
+		case "/approve":
+			a.ui.Status("PASS", "已批准: %s", prompt)
+			return true
+		case "/deny":
+			a.ui.Status("WARN", "已拒绝: %s", prompt)
+			return false
+		case "":
+			continue
+		default:
+			a.ui.Status("WARN", "未知审批指令 %q，输入 /approve 或 /deny", line)
+		}
+	}
 }
 
 func (a *Agent) saveWorklog() {

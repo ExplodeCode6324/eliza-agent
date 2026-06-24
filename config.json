@@ -12,9 +12,11 @@
   "dangerous_patterns": [
     "rm\\s+-rf\\s+/",
     "rm\\s+-rf\\s+\\*",
+    "\\brm\\b",
     "dd\\s+if=",
     "mkfs",
     ">\\s*/dev/sd",
+    ">\\s*\\S",
     "chmod\\s+777",
     "sudo\\s+rm"
   ],
