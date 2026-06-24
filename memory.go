@@ -232,7 +232,7 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 			updated += "\n"
 		}
 		updated += "\n" + strings.TrimSpace(content) + "\n"
-		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: append\n精确新增内容:\n---\n%s\n---\n批准本次修改? [y/N]: ", filepath.Join(memoryDir(), filename), strings.TrimSpace(content))
+		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: append\n精确新增内容:\n---\n%s\n---\n批准本次修改? [/approve OR /deny]", filename, strings.TrimSpace(content))
 		if t.confirmFn == nil || !t.confirmFn(request) {
 			t.recordDecision("rejected", filename, action)
 			return "用户拒绝或取消了 memory 修改；文件未变化。", nil
@@ -256,7 +256,7 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 			return "", fmt.Errorf("forget 匹配必须恰好一次，当前匹配 %d 次", strings.Count(existing, content))
 		}
 		updated := strings.Replace(existing, content, "", 1)
-		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: delete\n精确删除内容:\n---\n%s\n---\n批准本次修改? [y/N]: ", filepath.Join(memoryDir(), filename), content)
+		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: delete\n精确删除内容:\n---\n%s\n---\n批准本次修改? [/approve OR /deny]", filename, content)
 		if t.confirmFn == nil || !t.confirmFn(request) {
 			t.recordDecision("rejected", filename, action)
 			return "用户拒绝或取消了 memory 修改；文件未变化。", nil

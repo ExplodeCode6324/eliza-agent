@@ -724,7 +724,7 @@ func (a *Agent) approvalLoop(prompt string) bool {
 		return false
 	}
 	a.ui.Status("BLOCKED", "%s", prompt)
-	a.ui.Status("BLOCKED", "输入 /approve 确认执行，/deny 拒绝")
+	a.ui.Status("BLOCKED", "输入 /approve 或 /deny")
 
 	for {
 		line, err := readTerminalLine()
