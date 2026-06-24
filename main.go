@@ -178,6 +178,11 @@ func runMain(args []string) int {
 	registry.Register(&SkillListTool{})
 	registry.Register(&SkillViewTool{})
 	registry.Register(&MemoryTool{confirmFn: agent.approvalLoop, allowWrite: opts.Query == "", worklog: agent.worklog})
+	registry.Register(NewViewImageTool(
+		getEnvWithDefault("ELIZA_VISION_BASE_URL", ""),
+		getEnvWithDefault("ELIZA_VISION_API_KEY", ""),
+		getEnvWithDefault("ELIZA_VISION_MODEL", ""),
+	))
 	configureSkills(cfg.Skills, agent.worklog)
 	scanSkills()
 	if envInfo.Generated {
@@ -394,6 +399,12 @@ func applyEnvironment(cfg *Config) {
 	}
 	setEnvInt("ELIZA_SKILL_MAX_FILE_BYTES", &cfg.Skills.MaxFileBytes)
 	setEnvInt("ELIZA_SKILL_MAX_INDEX_BYTES", &cfg.Skills.MaxIndexBytes)
+}
+func getEnvWithDefault(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return strings.TrimSpace(v)
+	}
+	return fallback
 }
 func setEnvInt(name string, target *int) {
 	if v := os.Getenv(name); v != "" {
@@ -690,6 +701,10 @@ func defaultEnvContent() string {
 		"ELIZA_COMPACT_EMERGENCY_PERCENT=90\n" +
 		"ELIZA_COMPACT_MAX_COUNT=3\n" +
 		"ELIZA_COMPACT_KEEP_RECENT_GROUPS=8\n\n" +
+		"# 视觉理解（可选，不填则 view_image 工具返回配置提示）\n" +
+		"ELIZA_VISION_BASE_URL=\n" +
+		"ELIZA_VISION_API_KEY=\n" +
+		"ELIZA_VISION_MODEL=\n\n" +
 		"# 文件策略\n" +
 		"ELIZA_FILE_BASE_DIR=.\n" +
 		"ELIZA_WORKSPACE_ROOTS=.\n" +
