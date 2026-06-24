@@ -443,7 +443,7 @@ func loadConfig(specifiedPath string) (*Config, error) {
 			WorkspaceRoots:   []string{"."},
 			BlockedPaths:     []string{".env", "/proc/kcore", "/dev/mem", "/dev/kmem"},
 			ReadonlyPaths:    []string{"/proc", "/sys", "/dev"},
-			AllowAbsolute:    false,
+			AllowAbsolute:    true,
 			MaxReadBytes:     1048576,
 			MemoryMaxPercent: 25,
 		},
@@ -509,7 +509,7 @@ func parseYAMLConfig(data []byte) (*Config, error) {
 		Memory:      MemoryConfig{MaxFileBytes: defaultMemoryFileLimit, MaxTotalBytes: defaultMemoryTotalLimit},
 		Skills:      SkillConfig{Enabled: true, MaxFileBytes: 128 * 1024, MaxIndexBytes: 64 * 1024},
 		Command:     CommandPolicyConfig{Mode: ModeReadonly, TimeoutSeconds: 60, MaxOutputBytes: 65536, ReadonlyCommands: DefaultReadonlyCommands()},
-		File:        FilePolicyConfig{BaseDir: ".", WorkspaceRoots: []string{"."}, AllowAbsolute: false, MaxReadBytes: 1048576, MemoryMaxPercent: 25},
+		File:        FilePolicyConfig{BaseDir: ".", WorkspaceRoots: []string{"."}, AllowAbsolute: true, MaxReadBytes: 1048576, MemoryMaxPercent: 25},
 		Compression: DefaultCompressConfig(),
 	}
 
@@ -695,7 +695,7 @@ func defaultEnvContent() string {
 		"ELIZA_WORKSPACE_ROOTS=.\n" +
 		"ELIZA_FILE_BLOCKED_PATHS=.env;/proc/kcore;/dev/mem;/dev/kmem\n" +
 		"ELIZA_FILE_READONLY_PATHS=/proc;/sys;/dev\n" +
-		"ELIZA_FILE_ALLOW_ABSOLUTE=false\n" +
+		"ELIZA_FILE_ALLOW_ABSOLUTE=true\n" +
 		"ELIZA_FILE_MAX_READ_BYTES=1048576\n" +
 		"ELIZA_FILE_MEMORY_PERCENT=25\n\n" +
 		"# Memory 与 Skills 加载上限\n" +
