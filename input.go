@@ -93,7 +93,7 @@ func readLineRaw() (string, error) {
 			fmt.Fprint(os.Stderr, "\r\n")
 			return string(runesToBytes(buf)), nil
 
-		case b == 127: // Backspace — delete one rune before cursor
+		case b == 127 || b == 8: // Backspace (DEL or ^H) — delete one rune before cursor
 			if pos > 0 {
 				pos--
 				buf = append(buf[:pos], buf[pos+1:]...)
@@ -255,7 +255,7 @@ func redrawLine(buf []rune, pos int) {
 	if newlines > 0 {
 		fmt.Fprintf(os.Stderr, "\r\x1b[%dA\x1b[0J", newlines)
 	} else {
-		fmt.Fprint(os.Stderr, "\r\x1b[0K")
+		fmt.Fprint(os.Stderr, "\r\x1b[2K") // \x1b[2K = clear entire line (safer than 0K)
 	}
 
 	// Draw content
