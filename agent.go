@@ -6,15 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chzyer/readline"
 )
 
 type LoopState string
@@ -125,52 +122,15 @@ func (a *Agent) RunInteractive() error {
 		a.ui.Status("WARN", "记忆系统未初始化 — 首次启动向导")
 		a.ui.Status("WARN", "请向我描述你自己和项目背景，我会引导你完成初始化")
 	}
-	// ── Readline input (chzyer/readline: CJK, paste, full line editing) ──
-	rl, rlErr := readline.New("")
-	useReadline := rlErr == nil
-	if useReadline {
-		defer rl.Close()
-	}
 	for {
-		var line string
-		var err error
-
-		if useReadline {
-			rl.SetPrompt(fmt.Sprintf("\nUSER [%s/%s]> ", a.registry.Mode(), a.roleName))
-			line, err = rl.Readline()
-			// readline returns io.EOF on Ctrl+D, ErrInterrupt on Ctrl+C
-			if err == io.EOF {
-				return nil
-			}
-			if err == readline.ErrInterrupt {
-				if a.CancelCurrent() {
-					a.ui.Status("WARN", "当前请求已取消")
-				}
-				continue
-			}
-			if err != nil {
-				return err
-			}
-		} else {
-			a.ui.Prompt(a.registry.Mode(), a.roleName)
-			line, err = readTerminalLine()
-			if err != nil && line == "" {
-				return nil
-			}
+		a.ui.Prompt(a.registry.Mode(), a.roleName)
+		line, err := readTerminalLine()
+		if err != nil && line == "" {
+			return nil
 		}
 		input := strings.TrimSpace(line)
 		if input == "" {
 			continue
-		}
-		// ── Paste / multi-line / long text → temp file ─────────
-		if strings.Contains(line, "\n") || len(line) > 500 {
-			path, err := writeStdinTempFile(line)
-			if err != nil {
-				a.ui.Status("FAIL", "写入临时文件失败: %v", err)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "\n[FILE] %s\n", path)
-			input = "FILE:" + path
 		}
 		lower := strings.ToLower(input)
 		a.recordTUICommand(input)
