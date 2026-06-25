@@ -136,7 +136,8 @@ func (a *Agent) RunInteractive() error {
 		var err error
 
 		if useReadline {
-			rl.SetPrompt(fmt.Sprintf("\nUSER [%s/%s]> ", a.registry.Mode(), a.roleName))
+			fmt.Fprint(os.Stdout, "\n") // visual separator (outside prompt for correct width calc)
+			rl.SetPrompt(fmt.Sprintf("USER [%s/%s]> ", a.registry.Mode(), a.roleName))
 			line, err = rl.Readline()
 			// readline returns io.EOF on Ctrl+D, ErrInterrupt on Ctrl+C
 			if err == io.EOF {
