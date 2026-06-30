@@ -66,7 +66,11 @@ type PluginsConfig struct {
 }
 
 type BrowserPluginConfig struct {
-	ChromiumDir string `json:"chromium_dir"`
+	ChromiumDir    string `json:"chromium_dir"`
+	ToolsDir       string `json:"tools_dir"`
+	ExecPath       string `json:"exec_path"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	MaxTextBytes   int    `json:"max_text_bytes"`
 }
 
 type CommandPolicyConfig struct {
@@ -183,6 +187,9 @@ func runMain(args []string) int {
 		getEnvWithDefault("ELIZA_VISION_API_KEY", ""),
 		getEnvWithDefault("ELIZA_VISION_MODEL", ""),
 	))
+	if registerBrowserTools(registry, cfg.Plugins.Browser, filePolicy) {
+		agent.ui.Status("PASS", "浏览器工具已启用")
+	}
 	configureSkills(cfg.Skills, agent.worklog)
 	scanSkills()
 	if envInfo.Generated {
@@ -399,6 +406,17 @@ func applyEnvironment(cfg *Config) {
 	}
 	setEnvInt("ELIZA_SKILL_MAX_FILE_BYTES", &cfg.Skills.MaxFileBytes)
 	setEnvInt("ELIZA_SKILL_MAX_INDEX_BYTES", &cfg.Skills.MaxIndexBytes)
+	if v := os.Getenv("ELIZA_BROWSER_CHROMIUM_DIR"); v != "" {
+		cfg.Plugins.Browser.ChromiumDir = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("ELIZA_BROWSER_TOOLS_DIR"); v != "" {
+		cfg.Plugins.Browser.ToolsDir = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("ELIZA_BROWSER_EXEC_PATH"); v != "" {
+		cfg.Plugins.Browser.ExecPath = strings.TrimSpace(v)
+	}
+	setEnvInt("ELIZA_BROWSER_TIMEOUT", &cfg.Plugins.Browser.TimeoutSeconds)
+	setEnvInt("ELIZA_BROWSER_MAX_TEXT_BYTES", &cfg.Plugins.Browser.MaxTextBytes)
 }
 func getEnvWithDefault(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
@@ -458,6 +476,7 @@ func loadConfig(specifiedPath string) (*Config, error) {
 			MaxReadBytes:     1048576,
 			MemoryMaxPercent: 25,
 		},
+		Plugins:     PluginsConfig{Browser: defaultBrowserPluginConfig()},
 		Compression: DefaultCompressConfig(),
 		DangerousPatterns: []string{
 			`rm\s+-rf\s+/`,
@@ -521,6 +540,7 @@ func parseYAMLConfig(data []byte) (*Config, error) {
 		Skills:      SkillConfig{Enabled: true, MaxFileBytes: 128 * 1024, MaxIndexBytes: 64 * 1024},
 		Command:     CommandPolicyConfig{Mode: ModeReadonly, TimeoutSeconds: 60, MaxOutputBytes: 65536, ReadonlyCommands: DefaultReadonlyCommands()},
 		File:        FilePolicyConfig{BaseDir: ".", WorkspaceRoots: []string{"."}, AllowAbsolute: true, MaxReadBytes: 1048576, MemoryMaxPercent: 25},
+		Plugins:     PluginsConfig{Browser: defaultBrowserPluginConfig()},
 		Compression: DefaultCompressConfig(),
 	}
 
@@ -580,6 +600,14 @@ func parseYAMLConfig(data []byte) (*Config, error) {
 				switch key {
 				case "chromium_dir":
 					cfg.Plugins.Browser.ChromiumDir = val
+				case "tools_dir":
+					cfg.Plugins.Browser.ToolsDir = val
+				case "exec_path":
+					cfg.Plugins.Browser.ExecPath = val
+				case "timeout_seconds":
+					fmt.Sscanf(val, "%d", &cfg.Plugins.Browser.TimeoutSeconds)
+				case "max_text_bytes":
+					fmt.Sscanf(val, "%d", &cfg.Plugins.Browser.MaxTextBytes)
 				}
 			}
 		}
@@ -719,7 +747,13 @@ func defaultEnvContent() string {
 		"ELIZA_SKILLS_ENABLED=true\n" +
 		"ELIZA_SKILLS_DISABLED=\n" +
 		"ELIZA_SKILL_MAX_FILE_BYTES=131072\n" +
-		"ELIZA_SKILL_MAX_INDEX_BYTES=65536\n"
+		"ELIZA_SKILL_MAX_INDEX_BYTES=65536\n\n" +
+		"# 无头浏览器（可选）：首次落地/手动放置到 ~/eliza/tools；也兼容二进制同目录 plugins/chromium\n" +
+		"ELIZA_BROWSER_TOOLS_DIR=~/eliza/tools\n" +
+		"ELIZA_BROWSER_CHROMIUM_DIR=./plugins/chromium\n" +
+		"ELIZA_BROWSER_EXEC_PATH=\n" +
+		"ELIZA_BROWSER_TIMEOUT=30\n" +
+		"ELIZA_BROWSER_MAX_TEXT_BYTES=24000\n"
 }
 
 func splitEnvList(value string, separator string) []string {
@@ -750,8 +784,17 @@ func resolveRuntimePaths(cfg *Config) {
 	if !filepath.IsAbs(cfg.Worklog.Dir) {
 		cfg.Worklog.Dir = filepath.Join(base, cfg.Worklog.Dir)
 	}
+	cfg.Plugins.Browser.ChromiumDir = expandUserPath(cfg.Plugins.Browser.ChromiumDir)
 	if cfg.Plugins.Browser.ChromiumDir != "" && !filepath.IsAbs(cfg.Plugins.Browser.ChromiumDir) {
 		cfg.Plugins.Browser.ChromiumDir = filepath.Join(base, cfg.Plugins.Browser.ChromiumDir)
+	}
+	cfg.Plugins.Browser.ToolsDir = expandUserPath(cfg.Plugins.Browser.ToolsDir)
+	cfg.Plugins.Browser.ExecPath = expandUserPath(cfg.Plugins.Browser.ExecPath)
+	if cfg.Plugins.Browser.ToolsDir == "" {
+		cfg.Plugins.Browser.ToolsDir = defaultBrowserToolsDir()
+	}
+	if cfg.Plugins.Browser.ToolsDir != "" && !filepath.IsAbs(cfg.Plugins.Browser.ToolsDir) {
+		cfg.Plugins.Browser.ToolsDir = filepath.Join(base, cfg.Plugins.Browser.ToolsDir)
 	}
 }
 
@@ -763,6 +806,9 @@ func ensureRuntimeLayout(cfg *Config) error {
 	}
 	if cfg.Worklog.Enabled {
 		dirs = append(dirs, cfg.Worklog.Dir)
+	}
+	if cfg.Plugins.Browser.ToolsDir != "" {
+		dirs = append(dirs, cfg.Plugins.Browser.ToolsDir)
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -845,10 +891,18 @@ func isPlaceholderAPIKey(value string) bool {
 }
 
 func findChromium(baseDir string) string {
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return ""
+	}
 	// 按架构匹配
 	candidates := []string{
+		filepath.Join(baseDir, "chrome-headless-shell-linux64", "chrome-headless-shell"),
+		filepath.Join(baseDir, "chrome-headless-shell-linux-arm64", "chrome-headless-shell"),
 		filepath.Join(baseDir, "chrome-linux64", "chrome"),
 		filepath.Join(baseDir, "chrome-linux-arm64", "chrome"),
+		filepath.Join(baseDir, "chrome-headless-shell", "chrome-headless-shell"),
+		filepath.Join(baseDir, "chrome-headless-shell"),
 		filepath.Join(baseDir, "chromium"),
 		filepath.Join(baseDir, "chrome"),
 	}

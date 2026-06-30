@@ -26,7 +26,11 @@
   },
   "plugins": {
     "browser": {
-      "chromium_dir": "./plugins/chromium"
+      "chromium_dir": "./plugins/chromium",
+      "tools_dir": "~/eliza/tools",
+      "exec_path": "",
+      "timeout_seconds": 30,
+      "max_text_bytes": 24000
     }
   }
 }

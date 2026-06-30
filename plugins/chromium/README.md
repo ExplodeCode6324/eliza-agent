@@ -1,1 +1,17 @@
-# Chromium 插件目录\n\n按架构放入 Chromium 二进制以启用浏览器工具：\n\n- linux/amd64: chrome-linux64/chrome\n- linux/arm64: chrome-linux-arm64/chrome\n\nELIZA 启动时会自动检测并注册浏览器工具。
+# Chromium compatibility directory
+
+ELIZA now prefers `~/eliza/tools` for optional headless browser assets. This
+legacy directory is still scanned for compatibility when the binary runs from a
+repo or release bundle.
+
+Supported layouts include:
+
+- `chrome-linux64/chrome`
+- `chrome-linux-arm64/chrome`
+- `chrome-headless-shell-linux64/chrome-headless-shell`
+- `chrome-headless-shell-linux-arm64/chrome-headless-shell`
+- `chromium`
+- `chrome`
+
+You can also set `ELIZA_BROWSER_EXEC_PATH` to point directly at a browser
+executable.

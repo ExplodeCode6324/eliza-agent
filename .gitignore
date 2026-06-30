@@ -1,10 +1,11 @@
 # ELIZA-AGENT
 # Built artifacts
-eliza
-eliza-linux-amd64
-eliza-linux-arm64
-eliza-windows-amd64.exe
-eliza-tui-preview
+/eliza
+/eliza-linux-amd64
+/eliza-linux-arm64
+/eliza-windows-amd64.exe
+/eliza-tui-preview
+/test/eliza
 
 # Runtime generated
 .env

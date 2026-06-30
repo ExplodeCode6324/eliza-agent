@@ -323,6 +323,9 @@ func (r *ToolRegistry) ToolAllowedReason(name string) (bool, string) {
 	if r.Mode() == ModeReadonly && name == "write_file" {
 		return false, "readonly mode disables write_file"
 	}
+	if r.Mode() == ModeReadonly && isBrowserAutopilotOnlyTool(name) {
+		return false, "readonly mode disables browser interaction tools"
+	}
 	if roleDef, ok := builtinRoles[role]; ok && roleDef.ForceReadonly && name == "write_file" {
 		return false, "role forces readonly"
 	}
