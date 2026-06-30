@@ -2,16 +2,23 @@
 
 单二进制 · 零依赖 · 拷走即用
 
-v0.8.0 · CGO_ENABLED=0 · linux/amd64/arm64
+v0.8.0 · CGO_ENABLED=0 · 内置无头 Chromium 浏览器
+
+---
+
+**最新更新 (2026-06-30): 内置无头浏览器支持。** 基于 Go chromedp，
+不需要 Node/Python/Playwright/Puppeteer。Chromium 本体可选 —
+解压到 `~/eliza/tools/` 即可自动激活 `browser_open` / `browser_snapshot`
+等 7 个浏览器工具。详见 [无头浏览器](#无头浏览器) 章节。
 
 ---
 
 一个面向企业内网的 CLI AI Agent。不装 Docker，不装 Python，不装 Node。
-你只需要一个 6.9MB 的文件，拷过去就能跑。
+你只需要一个 8.8MB 的文件，拷过去就能跑。
 
 ```
-$ scp eliza user@192.168.1.x:/opt/
-$ ssh user@192.168.1.x '/opt/eliza --version'
+$ scp eliza-linux-amd64 user@192.168.1.x:/opt/
+$ ssh user@192.168.1.x '/opt/eliza-linux-amd64 --version'
 ELIZA Agent v0.8.0
 ```
 
@@ -49,9 +56,27 @@ make build-all
 # 单次查询
 ./eliza -q "磁盘使用情况"
 
-# 自检
-./eliza doctor --offline
+# 自检（含浏览器状态）
+./eliza doctor
+
+# 浏览器功能（需 Chromium，见下方无头浏览器章节）
+ELIZA_MODE=autopilot ./eliza -q "browser_open https://www.example.com 告诉我标题"
 ```
+
+### 预编译二进制
+
+`binaries/` 目录提供 linux/darwin/windows × amd64/arm64 六个平台的静态二进制。
+拷走即用，无需编译环境。
+
+```bash
+# Linux amd64
+./binaries/eliza-linux-amd64 --version
+
+# Linux arm64
+./binaries/eliza-linux-arm64 --version
+```
+
+浏览器功能在所有预编译二进制中均已内置。Chromium 本体需单独部署（见下方）。
 
 ## 工具
 
@@ -161,15 +186,53 @@ ELIZA_Agent/
 把 Chromium 或 `chrome-headless-shell` 解压到这里；旧的 `./plugins/chromium`
 目录仍会被扫描。
 
-常见布局：
+### 部署 Chromium（内网环境）
+
+```bash
+# 1. 在外网机器下载 chrome-headless-shell（~114M）
+wget https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.24/linux64/chrome-headless-shell-linux64.zip
+
+# 2. 解压到 ~/eliza/tools/
+mkdir -p ~/eliza/tools/chrome-headless-shell
+unzip chrome-headless-shell-linux64.zip -d ~/eliza/tools/chrome-headless-shell/
+
+# 3. 验证
+./eliza doctor | grep browser
+# 期望: PASS  browser ...
+```
+
+内网部署时，将 chrome-headless-shell 压缩包 + eliza 二进制一同拷入，
+按上述步骤解压即可。ELIZA 启动时自动扫描并激活浏览器工具。
+
+### 目录布局
 
 ```text
 ~/eliza/tools/
-├── chrome-linux64/chrome
-├── chrome-linux-arm64/chrome
-├── chrome-headless-shell-linux64/chrome-headless-shell
-└── chrome-headless-shell-linux-arm64/chrome-headless-shell
+├── chrome-headless-shell/
+│   └── chrome-headless-shell-linux64/
+│       └── chrome-headless-shell   ← 二进制本体
+├── chrome-linux64/chrome           ← 或完整 Chrome
+└── chrome-linux-arm64/chrome       ← ARM 版本
 ```
+
+ELIZA 的 `findChromium` 按以下优先级搜索：
+1. `ELIZA_BROWSER_EXEC_PATH` 环境变量（直接路径）
+2. `~/eliza/tools/` 下各架构子目录
+3. `./plugins/chromium/`（兼容目录）
+4. 系统 PATH（`chromium` / `google-chrome` 等）
+
+### 浏览器工具模式限制
+
+| 工具 | readonly | autopilot |
+|------|:--------:|:---------:|
+| `browser_open` | ✅ | ✅ |
+| `browser_snapshot` | ✅ | ✅ |
+| `browser_reset` | ✅ | ✅ |
+| `browser_click` | ❌ | ✅ |
+| `browser_type` | ❌ | ✅ |
+| `browser_screenshot` | ❌ | ✅ |
+
+只读操作（打开/快照/重置）在 readonly 模式下可用；交互和截图需 autopilot。
 
 ## 后续功能变更思路
 
