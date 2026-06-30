@@ -81,21 +81,10 @@ func (b *BrowserRuntime) run(parent context.Context, actions ...chromedp.Action)
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(b.browserCtx, b.timeout)
-	defer cancel()
-	done := make(chan struct{})
-	if parent != nil {
-		go func() {
-			select {
-			case <-parent.Done():
-				cancel()
-			case <-done:
-			}
-		}()
-	}
-	defer close(done)
-
-	err := chromedp.Run(ctx, actions...)
+	// 直接使用 browserCtx，不使用 context.WithTimeout 派生。
+	// 派生 context 的 cancel 会触发 chromedp 内部关闭浏览器连接，
+	// 导致后续操作失败（"context canceled"）。
+	err := chromedp.Run(b.browserCtx, actions...)
 	if err != nil && b.browserCtx.Err() != nil {
 		b.resetLocked()
 	}
@@ -122,9 +111,8 @@ func (b *BrowserRuntime) ensureLocked() error {
 	b.allocatorCtx, b.allocatorCancel = chromedp.NewExecAllocator(context.Background(), opts...)
 	b.browserCtx, b.browserCancel = chromedp.NewContext(b.allocatorCtx)
 
-	startCtx, cancel := context.WithTimeout(b.browserCtx, b.timeout)
-	defer cancel()
-	if err := chromedp.Run(startCtx, chromedp.Navigate("about:blank")); err != nil {
+	// 直接用 browserCtx 做初始化导航，避免派生 context cancel 关闭浏览器
+	if err := chromedp.Run(b.browserCtx, chromedp.Navigate("about:blank")); err != nil {
 		b.resetLocked()
 		return fmt.Errorf("启动无头浏览器失败: %w", err)
 	}
