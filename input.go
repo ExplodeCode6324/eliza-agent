@@ -17,7 +17,6 @@ const (
 	bracketedPasteEnd     = "\x1b[201~"
 
 	pasteNewlineGap     = 50 * time.Millisecond
-	pasteRedrawBurstGap = 5 * time.Millisecond
 	pasteCollapseBytes  = 500
 	pasteReferenceLabel = "Pasted text"
 )
@@ -56,7 +55,6 @@ func readLineRaw() (string, error) {
 		gap := now.Sub(lastByteTime)
 		lastByteTime = now
 		pasteNewline := gap < pasteNewlineGap
-		redrawBurst := gap < pasteRedrawBurstGap
 
 		switch {
 		case b == 3:
@@ -130,35 +128,28 @@ func readLineRaw() (string, error) {
 			redrawLine(buf, pos)
 
 		case b >= 32 && b <= 126:
+			collapseIdleBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput, gap)
 			insertText(&buf, &pos, string(rune(b)))
-			if !redrawBurst {
-				collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
-				redrawLine(buf, pos)
-			} else {
-				dirtyBurstInput = true
+			if dirtyBurstInput {
+				continue
 			}
+			redrawLine(buf, pos)
 
 		case b == '\n':
 			insertText(&buf, &pos, "\n")
-			if !redrawBurst {
-				collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
-				redrawLine(buf, pos)
-			} else {
-				dirtyBurstInput = true
-			}
+			dirtyBurstInput = true
 
 		case b >= 128:
+			collapseIdleBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput, gap)
 			r, ok := readUTF8Rune(fd, data, b)
 			if !ok {
 				continue
 			}
 			insertText(&buf, &pos, string(r))
-			if !redrawBurst {
-				collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
-				redrawLine(buf, pos)
-			} else {
-				dirtyBurstInput = true
+			if dirtyBurstInput {
+				continue
 			}
+			redrawLine(buf, pos)
 		}
 	}
 }
@@ -278,6 +269,12 @@ func collapseBurstBufferForDisplay(buf *[]rune, pos *int, dirty *bool) {
 	placeholder := fmt.Sprintf("[%s #%d: %d lines -> %s]", pasteReferenceLabel, pasteReferenceID, lineCount(content), path)
 	*buf = []rune(placeholder)
 	*pos = len(*buf)
+}
+
+func collapseIdleBurstBufferForDisplay(buf *[]rune, pos *int, dirty *bool, gap time.Duration) {
+	if gap >= pasteNewlineGap {
+		collapseBurstBufferForDisplay(buf, pos, dirty)
+	}
 }
 
 func expandPasteReferences(content string) (string, []string) {

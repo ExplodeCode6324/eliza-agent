@@ -1,9 +1,11 @@
 package main
 
 import (
+	"io"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInsertPasteCollapsesMultilineToReference(t *testing.T) {
@@ -71,6 +73,59 @@ func TestReadBracketedPasteStopsAtEndMarker(t *testing.T) {
 	}
 	if got != "hello\nworld" {
 		t.Fatalf("bracketed paste content mismatch: %q", got)
+	}
+}
+
+func TestReadLineRawRedrawsFastCJKCommit(t *testing.T) {
+	oldStdin := os.Stdin
+	oldStderr := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrFile, err := os.CreateTemp("", "eliza-input-stderr-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(stderrFile.Name())
+	defer func() {
+		os.Stdin = oldStdin
+		os.Stderr = oldStderr
+		reader.Close()
+		stderrFile.Close()
+	}()
+	os.Stdin = reader
+	os.Stderr = stderrFile
+
+	const phrase = "这是一条测试消息"
+	go func() {
+		defer writer.Close()
+		for _, r := range "这是一条测试" {
+			time.Sleep(20 * time.Millisecond)
+			_, _ = writer.WriteString(string(r))
+		}
+		time.Sleep(20 * time.Millisecond)
+		_, _ = writer.WriteString("消息")
+		time.Sleep(80 * time.Millisecond)
+		_, _ = writer.Write([]byte{13})
+	}()
+
+	got, err := readLineRaw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != phrase {
+		t.Fatalf("input mismatch: %q", got)
+	}
+	if _, err := stderrFile.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(stderrFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(output), phrase) {
+		t.Fatalf("redraw output never showed full CJK phrase: %q", string(output))
 	}
 }
 
