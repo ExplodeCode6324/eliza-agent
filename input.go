@@ -4,54 +4,47 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
-// ─── Cursor-aware line input ───────────────────────────────────────
-//
-// Enter raw terminal mode, read bytes one at a time, support:
-//   - Arrow keys (left/right) for cursor movement
-//   - Backspace / Delete (rune-aware for CJK)
-//   - Home / End / Ctrl+A / Ctrl+E
-//   - Ctrl+U to clear line
-//   - Paste detection → multi-line / long text → temp file
-//   - Enter to submit
-//
-// Falls back to bufio reader if raw mode is unavailable (Windows, pipes).
-//
-// KNOWN LIMITATION (2026-06-24):
-// redrawLine() uses manual ANSI escape codes for multi-line clearing and
-// cursor positioning.  When the paste buffer contains many \n characters,
-// the cursor-up (\x1b[NA) + clear-to-end (\x1b[0J) sequence can cause
-// residual visual artifacts on some terminals (faint repeat lines).
-//
-// TODO:  Create a 'with-bubbletea' branch that replaces the raw terminal
-// input layer with github.com/charmbracelet/bubbletea (~30k★, Elm-like
-// Model/Update/View architecture).  Bubble Tea has built-in textarea
-// components with paste handling, cursor management, and proper viewport
-// control.  The pure-stdlib build would remain on main as the zero-dep
-// reference implementation.
+const (
+	bracketedPasteEnable  = "\x1b[?2004h"
+	bracketedPasteDisable = "\x1b[?2004l"
+	bracketedPasteStart   = "[200~"
+	bracketedPasteEnd     = "\x1b[201~"
 
-// readLineInput reads a line from stdin with full cursor editing support.
+	pasteNewlineGap     = 50 * time.Millisecond
+	pasteRedrawBurstGap = 5 * time.Millisecond
+	pasteCollapseBytes  = 500
+	pasteReferenceLabel = "Pasted text"
+)
+
+var (
+	terminalFallback     = bufio.NewReader(os.Stdin)
+	pasteReferenceID     int
+	pasteReferenceRegexp = regexp.MustCompile(`\[Pasted text #\d+: \d+ lines -> ([^\]]+)\]`)
+)
+
 func readLineInput() (string, error) {
 	if err := enterRawTerminal(); err != nil {
 		return readTerminalLineFallback()
 	}
 	defer exitRawTerminal()
+	enableBracketedPaste()
+	defer disableBracketedPaste()
 	return readLineRaw()
 }
 
-// readLineRaw reads a line in raw terminal mode with rune-aware cursor support.
 func readLineRaw() (string, error) {
 	var buf []rune
-	pos := 0 // cursor position in runes
-
+	pos := 0
 	fd := os.Stdin
 	data := make([]byte, 1)
-
-	lastByteTime := time.Now() // 粘贴检测：记录字节到达间隔
+	lastByteTime := time.Now()
+	dirtyBurstInput := false
 
 	for {
 		n, err := fd.Read(data)
@@ -62,136 +55,278 @@ func readLineRaw() (string, error) {
 		now := time.Now()
 		gap := now.Sub(lastByteTime)
 		lastByteTime = now
+		pasteNewline := gap < pasteNewlineGap
+		redrawBurst := gap < pasteRedrawBurstGap
 
 		switch {
-		case b == 3: // Ctrl+C
+		case b == 3:
 			return "", fmt.Errorf("interrupted")
 
-		case b == 13: // Enter / CR
-			// 粘贴检测: 距上一字节间隔 < 50ms → 粘贴中的换行 → 插入 \n, 不提交
-			if gap < 50*time.Millisecond {
-				buf = append(buf, 0)
-				copy(buf[pos+1:], buf[pos:])
-				buf[pos] = '\n'
-				pos++
-				// 粘贴时不重绘; 下一个手动输入会触发完整 redraw
+		case b == 13:
+			if pasteNewline {
+				insertText(&buf, &pos, "\n")
+				dirtyBurstInput = true
 				continue
 			}
-			content := strings.TrimRight(string(runesToBytes(buf)), "\n")
-			if content == "" {
-				fmt.Fprint(os.Stderr, "\r\n")
-				return "", nil
-			}
-			if strings.Contains(content, "\n") || len(content) > 500 {
-				path, err := writeStdinTempFile(content)
-				if err != nil {
-					return "", fmt.Errorf("写入临时文件失败: %w", err)
-				}
-				fmt.Fprintf(os.Stderr, "\r\n[FILE] %s\r\n", path)
-				return "FILE:" + path, nil
-			}
-			fmt.Fprint(os.Stderr, "\r\n")
-			return string(runesToBytes(buf)), nil
+			return submitInputBuffer(buf)
 
-		case b == 127: // Backspace — delete one rune before cursor
+		case b == 127:
+			collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
 			if pos > 0 {
 				pos--
 				buf = append(buf[:pos], buf[pos+1:]...)
 				redrawLine(buf, pos)
 			}
 
-		case b == 27: // ESC sequence
+		case b == 27:
+			collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
 			seq, ok := readEscSequence(fd)
 			if !ok {
 				continue
 			}
 			switch seq {
-			case "[D": // Left
+			case bracketedPasteStart:
+				pasted, err := readBracketedPaste(fd)
+				if err != nil {
+					return "", err
+				}
+				insertPaste(&buf, &pos, pasted)
+				dirtyBurstInput = false
+				redrawLine(buf, pos)
+			case "[D":
 				if pos > 0 {
 					pos--
 					redrawLine(buf, pos)
 				}
-			case "[C": // Right
+			case "[C":
 				if pos < len(buf) {
 					pos++
 					redrawLine(buf, pos)
 				}
-			case "[H": // Home
+			case "[H":
 				pos = 0
 				redrawLine(buf, pos)
-			case "[F": // End
+			case "[F":
 				pos = len(buf)
 				redrawLine(buf, pos)
-			case "[3~": // Delete — delete one rune at cursor
+			case "[3~":
 				if pos < len(buf) {
 					buf = append(buf[:pos], buf[pos+1:]...)
 					redrawLine(buf, pos)
 				}
 			}
 
-		case b == 1: // Ctrl+A = Home
+		case b == 1:
+			collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
 			pos = 0
 			redrawLine(buf, pos)
-		case b == 5: // Ctrl+E = End
+		case b == 5:
+			collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
 			pos = len(buf)
 			redrawLine(buf, pos)
-		case b == 21: // Ctrl+U = clear line
+		case b == 21:
 			buf = nil
 			pos = 0
 			redrawLine(buf, pos)
 
-		case b >= 32 && b <= 126: // ASCII printable
-			r := rune(b)
-			buf = append(buf, 0)
-			copy(buf[pos+1:], buf[pos:])
-			buf[pos] = r
-			pos++
-			redrawLine(buf, pos)
-
-		case b == '\n': // newline (paste)
-			buf = append(buf, 0)
-			copy(buf[pos+1:], buf[pos:])
-			buf[pos] = '\n'
-			pos++
-			// 粘贴时跳过重绘防闪烁; 手动输入时正常重绘
-			if gap >= 50*time.Millisecond {
+		case b >= 32 && b <= 126:
+			insertText(&buf, &pos, string(rune(b)))
+			if !redrawBurst {
+				collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
 				redrawLine(buf, pos)
+			} else {
+				dirtyBurstInput = true
 			}
 
-		case b >= 128: // Multi-byte UTF-8 leading byte
-			// Determine how many bytes in this UTF-8 sequence
-			byteLen := utf8ByteCount(b)
-			if byteLen < 2 {
-				continue // invalid
+		case b == '\n':
+			insertText(&buf, &pos, "\n")
+			if !redrawBurst {
+				collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
+				redrawLine(buf, pos)
+			} else {
+				dirtyBurstInput = true
 			}
-			// Read remaining bytes
-			seq := make([]byte, byteLen)
-			seq[0] = b
-			for i := 1; i < byteLen; i++ {
-				n, err := fd.Read(data)
-				if err != nil || n == 0 {
-					break
-				}
-				seq[i] = data[0]
-			}
-			r, size := utf8.DecodeRune(seq)
-			if r == utf8.RuneError && size <= 1 {
-				continue // invalid sequence, skip
-			}
-			buf = append(buf, 0)
-			copy(buf[pos+1:], buf[pos:])
-			buf[pos] = r
-			pos++
-			redrawLine(buf, pos)
 
-		default:
-			// Ignore other control chars
+		case b >= 128:
+			r, ok := readUTF8Rune(fd, data, b)
+			if !ok {
+				continue
+			}
+			insertText(&buf, &pos, string(r))
+			if !redrawBurst {
+				collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
+				redrawLine(buf, pos)
+			} else {
+				dirtyBurstInput = true
+			}
 		}
 	}
 }
 
-// utf8ByteCount returns the number of bytes in a UTF-8 sequence
-// given the leading byte.
+func submitInputBuffer(buf []rune) (string, error) {
+	content := strings.TrimRight(string(runesToBytes(buf)), "\n")
+	if content == "" {
+		fmt.Fprint(os.Stderr, "\r\n")
+		return "", nil
+	}
+
+	content, cleanup := expandPasteReferences(content)
+	for _, path := range cleanup {
+		_ = os.Remove(path)
+	}
+
+	if shouldStoreInputAsFile(content) {
+		path, err := writeStdinTempFile(content)
+		if err != nil {
+			return "", fmt.Errorf("write temp input file: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "\r\n[FILE] %s\r\n", path)
+		return "FILE:" + path, nil
+	}
+
+	fmt.Fprint(os.Stderr, "\r\n")
+	return content, nil
+}
+
+func insertPaste(buf *[]rune, pos *int, pasted string) {
+	pasted = normalizePastedText(pasted)
+	if pasted == "" {
+		return
+	}
+	if shouldStoreInputAsFile(pasted) {
+		path, err := writeStdinTempFile(pasted)
+		if err == nil {
+			pasteReferenceID++
+			placeholder := fmt.Sprintf("[%s #%d: %d lines -> %s]", pasteReferenceLabel, pasteReferenceID, lineCount(pasted), path)
+			if *pos > 0 && (*buf)[*pos-1] != ' ' {
+				placeholder = " " + placeholder
+			}
+			insertText(buf, pos, placeholder)
+			return
+		}
+	}
+	insertText(buf, pos, pasted)
+}
+
+func readBracketedPaste(fd *os.File) (string, error) {
+	data := make([]byte, 1)
+	var builder strings.Builder
+	tail := make([]byte, 0, len(bracketedPasteEnd))
+	for {
+		n, err := fd.Read(data)
+		if err != nil || n == 0 {
+			return builder.String(), err
+		}
+		builder.WriteByte(data[0])
+		tail = append(tail, data[0])
+		if len(tail) > len(bracketedPasteEnd) {
+			tail = tail[1:]
+		}
+		if string(tail) == bracketedPasteEnd {
+			content := builder.String()
+			return content[:len(content)-len(bracketedPasteEnd)], nil
+		}
+	}
+}
+
+func readUTF8Rune(fd *os.File, data []byte, lead byte) (rune, bool) {
+	byteLen := utf8ByteCount(lead)
+	if byteLen < 2 {
+		return utf8.RuneError, false
+	}
+	seq := make([]byte, byteLen)
+	seq[0] = lead
+	for i := 1; i < byteLen; i++ {
+		n, err := fd.Read(data)
+		if err != nil || n == 0 {
+			return utf8.RuneError, false
+		}
+		seq[i] = data[0]
+	}
+	r, size := utf8.DecodeRune(seq)
+	if r == utf8.RuneError && size <= 1 {
+		return utf8.RuneError, false
+	}
+	return r, true
+}
+
+func insertText(buf *[]rune, pos *int, text string) {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return
+	}
+	*buf = append(*buf, make([]rune, len(runes))...)
+	copy((*buf)[*pos+len(runes):], (*buf)[*pos:])
+	copy((*buf)[*pos:], runes)
+	*pos += len(runes)
+}
+
+func collapseBurstBufferForDisplay(buf *[]rune, pos *int, dirty *bool) {
+	if !*dirty {
+		return
+	}
+	*dirty = false
+	content := string(runesToBytes(*buf))
+	if !shouldStoreInputAsFile(content) {
+		return
+	}
+	path, err := writeStdinTempFile(content)
+	if err != nil {
+		return
+	}
+	pasteReferenceID++
+	placeholder := fmt.Sprintf("[%s #%d: %d lines -> %s]", pasteReferenceLabel, pasteReferenceID, lineCount(content), path)
+	*buf = []rune(placeholder)
+	*pos = len(*buf)
+}
+
+func expandPasteReferences(content string) (string, []string) {
+	var cleanup []string
+	expanded := pasteReferenceRegexp.ReplaceAllStringFunc(content, func(match string) string {
+		parts := pasteReferenceRegexp.FindStringSubmatch(match)
+		if len(parts) != 2 {
+			return match
+		}
+		path := parts[1]
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return match
+		}
+		cleanup = append(cleanup, path)
+		return string(data)
+	})
+	return expanded, cleanup
+}
+
+func shouldStoreInputAsFile(content string) bool {
+	return strings.Contains(content, "\n") || len(content) > pasteCollapseBytes
+}
+
+func normalizePastedText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\x1b[200~", "")
+	text = strings.ReplaceAll(text, "\x1b[201~", "")
+	text = strings.ReplaceAll(text, "^[[200~", "")
+	text = strings.ReplaceAll(text, "^[[201~", "")
+	return text
+}
+
+func lineCount(text string) int {
+	if text == "" {
+		return 0
+	}
+	return strings.Count(text, "\n") + 1
+}
+
+func enableBracketedPaste() {
+	fmt.Fprint(os.Stderr, bracketedPasteEnable)
+}
+
+func disableBracketedPaste() {
+	fmt.Fprint(os.Stderr, bracketedPasteDisable)
+}
+
 func utf8ByteCount(lead byte) int {
 	switch {
 	case lead&0x80 == 0:
@@ -207,7 +342,6 @@ func utf8ByteCount(lead byte) int {
 	}
 }
 
-// runesToBytes converts a rune slice to a byte slice.
 func runesToBytes(runes []rune) []byte {
 	var buf []byte
 	for _, r := range runes {
@@ -216,7 +350,6 @@ func runesToBytes(runes []rune) []byte {
 	return buf
 }
 
-// readEscSequence reads an ESC escape sequence from stdin.
 func readEscSequence(fd *os.File) (string, bool) {
 	data := make([]byte, 1)
 	n, err := fd.Read(data)
@@ -240,8 +373,6 @@ func readEscSequence(fd *os.File) (string, bool) {
 	return seq, true
 }
 
-// redrawLine clears all buffer lines and redraws buffer + positions cursor at pos.
-// Handles multi-line buffers: counts \n to move cursor up and clear correctly.
 func redrawLine(buf []rune, pos int) {
 	content := string(runesToBytes(buf))
 	newlines := 0
@@ -251,17 +382,14 @@ func redrawLine(buf []rune, pos int) {
 		}
 	}
 
-	// Clear: go to start of current line, move up N lines, clear to end of screen
 	if newlines > 0 {
 		fmt.Fprintf(os.Stderr, "\r\x1b[%dA\x1b[0J", newlines)
 	} else {
 		fmt.Fprint(os.Stderr, "\r\x1b[0K")
 	}
 
-	// Draw content
 	fmt.Fprint(os.Stderr, content)
 
-	// Position cursor at pos: find line+column within multi-line buffer
 	if pos < len(buf) && pos > 0 {
 		lineNum := 0
 		lastNewline := -1
@@ -282,7 +410,6 @@ func redrawLine(buf []rune, pos int) {
 	}
 }
 
-// writeStdinTempFile writes content to a temp file for multi-line/long input.
 func writeStdinTempFile(content string) (string, error) {
 	f, err := os.CreateTemp("", "eliza-input-*.txt")
 	if err != nil {
@@ -295,9 +422,6 @@ func writeStdinTempFile(content string) (string, error) {
 	return f.Name(), nil
 }
 
-// readTerminalLineFallback is the old bufio-based line reader (pipe mode).
 func readTerminalLineFallback() (string, error) {
 	return terminalFallback.ReadString('\n')
 }
-
-var terminalFallback = bufio.NewReader(os.Stdin)
