@@ -68,8 +68,12 @@ type rendererInputOverlay struct {
 
 func NewRenderer(cfg UIConfig) *Renderer {
 	stdoutTTY := isTerminalFile(os.Stdout)
+	stderrTTY := isTerminalFile(os.Stderr)
 	term := strings.ToLower(os.Getenv("TERM"))
 	plain := cfg.Plain || !stdoutTTY || term == "dumb"
+	if !stderrTTY {
+		plain = true
+	}
 	color := !plain && !cfg.NoColor && os.Getenv("NO_COLOR") == "" && runtime.GOOS != "windows"
 	lang := strings.ToUpper(os.Getenv("LC_ALL") + os.Getenv("LC_CTYPE") + os.Getenv("LANG"))
 	unicodeOK := !plain && (strings.Contains(lang, "UTF-8") || strings.Contains(lang, "UTF8"))
@@ -120,8 +124,12 @@ func (r *Renderer) style(text, color string) string {
 }
 
 func (r *Renderer) componentContext() UIComponentContext {
+	width := r.width
+	if fresh := detectedTerminalWidth(); fresh >= 20 {
+		width = fresh
+	}
 	return UIComponentContext{
-		Width:   r.width,
+		Width:   width,
 		Plain:   r.plain,
 		Unicode: r.unicode,
 		Style:   r.style,
