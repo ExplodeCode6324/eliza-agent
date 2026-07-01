@@ -65,10 +65,33 @@ func TestWideBannerUsesBrailleGirlAndSingleStartupPanel(t *testing.T) {
 	if !strings.ContainsAny(text, "⢀⣀⣤⡶⣿") || !strings.Contains(text, bannerTitle) || !strings.Contains(text, "version:") {
 		t.Fatal("panel is missing the girl, title, or startup parameters")
 	}
+	if !strings.Contains(text, "browser_tools:") || !strings.Contains(text, "disabled") {
+		t.Fatalf("startup panel should include browser tool status: %q", text)
+	}
 	for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
 		if displayWidth(line) > 132 {
 			t.Fatalf("wide banner line overflowed: width=%d line=%q", displayWidth(line), line)
 		}
+	}
+}
+
+func TestBannerShowsEnabledBrowserToolsInsideStartupPanel(t *testing.T) {
+	var output bytes.Buffer
+	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 96}
+	policy, _ := NewCommandPolicy(ModeReadonly, nil, DefaultReadonlyCommands())
+	registry := NewToolRegistry(policy)
+	registry.Register(&BrowserOpenTool{})
+	cfg := &Config{
+		Model:  ModelConfig{Name: "model", BaseURL: "https://example.internal/v1", APIKey: "secret-value"},
+		System: SystemInfo{OS: "linux", Architecture: "amd64"},
+		File:   FilePolicyConfig{WorkspaceRoots: []string{"/workspace"}},
+	}
+
+	renderer.Banner(cfg, registry, "/worklogs/session.md", 3)
+	text := output.String()
+
+	if !strings.Contains(text, "browser_tools:") || !strings.Contains(text, "enabled") {
+		t.Fatalf("startup panel should show enabled browser tools: %q", text)
 	}
 }
 
@@ -125,14 +148,19 @@ func TestApprovalBoxFramesOptionsWithoutSlashCommands(t *testing.T) {
 	var output bytes.Buffer
 	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 72}
 
-	lines := renderer.ApprovalBox("危险命令: rm file.txt", 2)
+	lines := renderer.ApprovalBox("Dangerous command: rm file.txt", 2)
 	text := output.String()
 
 	if lines < 8 || !strings.Contains(text, "╭") || !strings.Contains(text, "╰") {
 		t.Fatalf("approval prompt was not framed as a box: lines=%d text=%q", lines, text)
 	}
-	if !strings.Contains(text, "审批请求") || !strings.Contains(text, "> 拒绝，并告诉 ELIZA 应该怎么做") {
+	if !strings.Contains(text, "Approval request") || !strings.Contains(text, "> Deny and tell ELIZA what to do") {
 		t.Fatalf("approval prompt is missing title or guidance option: %q", text)
+	}
+	for _, chinese := range []string{"审批", "拒绝", "批准", "确认"} {
+		if strings.Contains(text, chinese) {
+			t.Fatalf("approval prompt should be English-only, found %q in %q", chinese, text)
+		}
 	}
 	if strings.Contains(text, "/approve") || strings.Contains(text, "/deny") {
 		t.Fatalf("approval prompt still references slash commands: %q", text)
@@ -143,7 +171,7 @@ func TestApprovalBoxUsesCRLFLineEndingsForRawMode(t *testing.T) {
 	var output bytes.Buffer
 	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 72}
 
-	renderer.ApprovalBox("危险命令: rm file.txt", 0)
+	renderer.ApprovalBox("Dangerous command: rm file.txt", 0)
 	text := output.String()
 
 	if strings.Contains(text, "\n") && containsBareLF(text) {

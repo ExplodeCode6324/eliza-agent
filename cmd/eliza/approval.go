@@ -14,9 +14,9 @@ const (
 )
 
 var approvalOptions = []string{
-	"拒绝",
-	"批准执行一次",
-	"拒绝，并告诉 ELIZA 应该怎么做",
+	"Deny",
+	"Approve once",
+	"Deny and tell ELIZA what to do",
 }
 
 type ApprovalResult struct {
@@ -53,16 +53,16 @@ func approvalGuidance(guidance string) ApprovalResult {
 
 func cancelledApprovalMessage(result ApprovalResult) string {
 	if strings.TrimSpace(result.Guidance) == "" {
-		return "CANCELLED: 用户拒绝了需要审批的工具调用"
+		return "CANCELLED: user denied the tool call that required approval"
 	}
-	return "CANCELLED: 用户拒绝了需要审批的工具调用\n用户补充要求: " + result.Guidance + "\n请根据用户补充要求调整方案，不要重复请求已拒绝的操作。"
+	return "CANCELLED: user denied the tool call that required approval\nUser guidance: " + result.Guidance + "\nAdjust the next step according to the user's guidance. Do not repeat the denied operation."
 }
 
 func cancelledMemoryMessage(result ApprovalResult) string {
 	if strings.TrimSpace(result.Guidance) == "" {
-		return "用户拒绝或取消了 memory 修改；文件未变化。"
+		return "User denied or cancelled the memory change; files were not modified."
 	}
-	return "用户拒绝了 memory 修改；文件未变化。\n用户补充要求: " + result.Guidance + "\n请根据用户补充要求调整方案，不要重复请求已拒绝的 memory 修改。"
+	return "User denied the memory change; files were not modified.\nUser guidance: " + result.Guidance + "\nAdjust the next step according to the user's guidance. Do not repeat the denied memory change."
 }
 
 func approvalResultFromSelection(renderer *Renderer, selected int) ApprovalResult {
@@ -70,7 +70,7 @@ func approvalResultFromSelection(renderer *Renderer, selected int) ApprovalResul
 	case 1:
 		return approvalGranted()
 	case 2:
-		renderer.Status("BLOCKED", "请输入希望 ELIZA 改怎么做（留空则仅拒绝）")
+		renderer.Status("BLOCKED", "Tell ELIZA what to do instead (empty = deny only)")
 		fmt.Fprint(renderer.out, "\nUSER> ")
 		line, err := readTerminalLine()
 		if err != nil && line == "" {

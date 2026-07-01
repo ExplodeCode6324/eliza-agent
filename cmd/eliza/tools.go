@@ -1016,7 +1016,7 @@ func readTerminalLine() (string, error) {
 }
 
 func defaultConfirm(command string) ApprovalResult {
-	return defaultApproval("危险命令: " + command)
+	return defaultApproval("Dangerous command: " + command)
 }
 
 func defaultApproval(prompt string) ApprovalResult {

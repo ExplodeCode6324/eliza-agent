@@ -456,10 +456,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []
 			} else if call.Func.Name == "write_file" {
 				path, _ := args["path"].(string)
 				content, _ := args["content"].(string)
-				prompt = fmt.Sprintf("WRITE_FILE 写入 %s (%d 字节)", path, len(content))
+				prompt = fmt.Sprintf("WRITE_FILE write %s (%d bytes)", path, len(content))
 				approval = a.approvalLoop(prompt)
 			} else {
-				approval = a.approvalLoop(fmt.Sprintf("危险命令: %s", prompt))
+				approval = a.approvalLoop(fmt.Sprintf("Dangerous command: %s", prompt))
 			}
 			if approval.Approved() {
 				args["_eliza_approved"] = true
@@ -729,17 +729,17 @@ func (a *Agent) approvalLoop(prompt string) ApprovalResult {
 		return a.ui.ApprovalBox(prompt, selected)
 	}, len(approvalOptions))
 	if err != nil {
-		a.ui.Status("WARN", "审批输入不可用，已拒绝: %s", prompt)
+		a.ui.Status("WARN", "Approval input unavailable; denied: %s", prompt)
 		return approvalDenied()
 	}
 	result := a.approvalResultFromSelection(selected)
 	if result.Approved() {
-		a.ui.Status("PASS", "已批准: %s", prompt)
+		a.ui.Status("PASS", "Approved: %s", prompt)
 		return result
 	}
-	a.ui.Status("WARN", "已拒绝: %s", prompt)
+	a.ui.Status("WARN", "Denied: %s", prompt)
 	if strings.TrimSpace(result.Guidance) != "" {
-		a.ui.Status("WARN", "已记录补充要求")
+		a.ui.Status("WARN", "User guidance recorded")
 	}
 	return result
 }
@@ -749,7 +749,7 @@ func (a *Agent) approvalResultFromSelection(selected int) ApprovalResult {
 	case 1:
 		return approvalGranted()
 	case 2:
-		a.ui.Status("BLOCKED", "请输入希望 ELIZA 改怎么做（留空则仅拒绝）")
+		a.ui.Status("BLOCKED", "Tell ELIZA what to do instead (empty = deny only)")
 		a.ui.Prompt(a.registry.Mode(), a.roleName)
 		line, err := readTerminalLine()
 		if err != nil && line == "" {

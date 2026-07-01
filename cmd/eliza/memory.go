@@ -232,7 +232,7 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 			updated += "\n"
 		}
 		updated += "\n" + strings.TrimSpace(content) + "\n"
-		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: append\n精确新增内容:\n---\n%s\n---", filename, strings.TrimSpace(content))
+		request := fmt.Sprintf("MEMORY change request\nTarget: %s\nAction: append\nExact content to add:\n---\n%s\n---", filename, strings.TrimSpace(content))
 		if t.approvalFn == nil {
 			t.recordDecision("rejected", filename, action, approvalDenied())
 			return cancelledMemoryMessage(approvalDenied()), nil
@@ -261,7 +261,7 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 			return "", fmt.Errorf("forget 匹配必须恰好一次，当前匹配 %d 次", strings.Count(existing, content))
 		}
 		updated := strings.Replace(existing, content, "", 1)
-		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: delete\n精确删除内容:\n---\n%s\n---", filename, content)
+		request := fmt.Sprintf("MEMORY change request\nTarget: %s\nAction: delete\nExact content to remove:\n---\n%s\n---", filename, content)
 		if t.approvalFn == nil {
 			t.recordDecision("rejected", filename, action, approvalDenied())
 			return cancelledMemoryMessage(approvalDenied()), nil

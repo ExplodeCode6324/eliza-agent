@@ -174,7 +174,7 @@ func runMain(args []string) int {
 	registry := NewToolRegistry(commandPolicy)
 	agent := NewAgent(cfg, llm, registry)
 	registry.confirmFn = func(command string) ApprovalResult {
-		return agent.approvalLoop(fmt.Sprintf("危险命令: %s", command))
+		return agent.approvalLoop(fmt.Sprintf("Dangerous command: %s", command))
 	}
 	registry.Register(&ReadFileTool{policy: filePolicy})
 	registry.Register(&WriteFileTool{policy: filePolicy})
@@ -187,9 +187,7 @@ func runMain(args []string) int {
 		getEnvWithDefault("ELIZA_VISION_API_KEY", ""),
 		getEnvWithDefault("ELIZA_VISION_MODEL", ""),
 	))
-	if registerBrowserTools(registry, cfg.Plugins.Browser, filePolicy) {
-		agent.ui.Status("PASS", "浏览器工具已启用")
-	}
+	registerBrowserTools(registry, cfg.Plugins.Browser, filePolicy)
 	configureSkills(cfg.Skills, agent.worklog)
 	scanSkills()
 	if envInfo.Generated {

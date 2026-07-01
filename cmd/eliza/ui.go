@@ -227,7 +227,7 @@ func (r *Renderer) ApprovalBox(prompt string, selected int) int {
 
 func (r *Renderer) approvalBoxLines(prompt string, selected int, width int) []string {
 	var lines []string
-	lines = append(lines, "审批请求")
+	lines = append(lines, "Approval request")
 	lines = append(lines, strings.Repeat("─", width))
 	for _, raw := range strings.Split(prompt, "\n") {
 		raw = strings.TrimRight(raw, "\r")
@@ -244,7 +244,7 @@ func (r *Renderer) approvalBoxLines(prompt string, selected int, width int) []st
 		lines = append(lines, marker+option)
 	}
 	lines = append(lines, strings.Repeat("─", width))
-	lines = append(lines, "↑/↓ 选择，Enter 确认")
+	lines = append(lines, "↑/↓ select, Enter confirm")
 	return lines
 }
 
@@ -264,7 +264,7 @@ func (r *Renderer) approvalStyledLine(raw string, width int) string {
 		padding = 0
 	}
 	color := ansiSoftRed
-	if strings.HasPrefix(raw, "> ") || raw == "审批请求" {
+	if strings.HasPrefix(raw, "> ") || raw == "Approval request" {
 		color = ansiWhite
 	}
 	return r.style("│ ", ansiSoftRed) + r.style(raw, color) + strings.Repeat(" ", padding) + r.style(" │", ansiSoftRed)
@@ -280,7 +280,8 @@ func (r *Renderer) Banner(cfg *Config, registry *ToolRegistry, worklogPath strin
 		{"base_url", displayEndpoint(cfg.Model.BaseURL)}, {"api_key", maskSecret(cfg.Model.APIKey)},
 		{"mode", registry.Mode()}, {"role", role},
 		{"os/arch", cfg.System.OS + "/" + cfg.System.Architecture},
-		{"skills", strconv.Itoa(skills)}, {"memory", memoryDir()},
+		{"skills", strconv.Itoa(skills)}, {"browser_tools", browserToolsStatus(registry)},
+		{"memory", memoryDir()},
 		{"worklog", worklogPath}, {"workspace", strings.Join(cfg.File.WorkspaceRoots, ";")},
 	}
 
@@ -312,6 +313,16 @@ func (r *Renderer) Banner(cfg *Config, registry *ToolRegistry, worklogPath strin
 	for _, line := range wrapDisplay(helpLine, r.width) {
 		fmt.Fprintln(r.out, r.style(line, ansiDim))
 	}
+}
+
+func browserToolsStatus(registry *ToolRegistry) string {
+	if registry == nil {
+		return "disabled"
+	}
+	if _, ok := registry.Get("browser_open"); ok {
+		return "enabled"
+	}
+	return "disabled"
 }
 
 func (r *Renderer) drawBrailleHero() {
