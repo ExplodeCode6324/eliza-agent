@@ -7,10 +7,14 @@ import (
 	"golang.org/x/term"
 )
 
-var originalTermState *term.State
+var (
+	originalTermState *term.State
+	rawTerminalDepth  int
+)
 
 func enterRawTerminal() error {
 	if originalTermState != nil {
+		rawTerminalDepth++
 		return nil
 	}
 	fd := int(os.Stdin.Fd())
@@ -22,6 +26,7 @@ func enterRawTerminal() error {
 		return err
 	}
 	originalTermState = old
+	rawTerminalDepth = 1
 	return nil
 }
 
@@ -29,6 +34,11 @@ func exitRawTerminal() {
 	if originalTermState == nil {
 		return
 	}
+	if rawTerminalDepth > 1 {
+		rawTerminalDepth--
+		return
+	}
 	_ = term.Restore(int(os.Stdin.Fd()), originalTermState)
 	originalTermState = nil
+	rawTerminalDepth = 0
 }

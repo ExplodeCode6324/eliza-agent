@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -47,6 +48,20 @@ type Renderer struct {
 
 	streamBuf strings.Builder
 	streaming bool
+
+	mu                   sync.Mutex
+	input                rendererInputOverlay
+	runningInputTerminal bool
+}
+
+type rendererInputOverlay struct {
+	active     bool
+	header     string
+	prefix     string
+	buf        []rune
+	pos        int
+	lines      int
+	cursorLine int
 }
 
 func NewRenderer(cfg UIConfig) *Renderer {
@@ -82,6 +97,121 @@ func (r *Renderer) style(text, color string) string {
 	return color + text + ansiReset
 }
 
+func (r *Renderer) writeWithInputPaused(w io.Writer, write func(io.Writer)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	wasActive := r.input.active
+	if wasActive {
+		r.clearInputLocked()
+	}
+	write(w)
+	if wasActive {
+		r.renderInputLocked()
+	}
+}
+
+func (r *Renderer) startInput(header, prefix string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.input.active {
+		r.clearInputLocked()
+	}
+	r.input = rendererInputOverlay{active: true, header: header, prefix: prefix}
+	r.renderInputLocked()
+}
+
+func (r *Renderer) updateInput(buf []rune, pos int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.input.active {
+		return
+	}
+	r.clearInputLocked()
+	r.input.buf = append(r.input.buf[:0], buf...)
+	r.input.pos = pos
+	r.renderInputLocked()
+}
+
+func (r *Renderer) finishInput() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.input.active {
+		return
+	}
+	r.clearInputLocked()
+	r.input = rendererInputOverlay{}
+}
+
+func (r *Renderer) suspendInput() func() {
+	r.mu.Lock()
+	if !r.input.active {
+		r.mu.Unlock()
+		return func() {}
+	}
+	saved := r.input
+	r.clearInputLocked()
+	r.input.active = false
+	r.mu.Unlock()
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.input.active {
+			r.clearInputLocked()
+		}
+		r.input = saved
+		r.input.active = true
+		r.renderInputLocked()
+	}
+}
+
+func (r *Renderer) clearInputLocked() {
+	if r.input.lines <= 0 {
+		return
+	}
+	fmt.Fprint(r.err, "\r")
+	if r.input.cursorLine > 0 {
+		fmt.Fprintf(r.err, "\x1b[%dA", r.input.cursorLine)
+	}
+	fmt.Fprint(r.err, "\x1b[0J")
+	r.input.lines = 0
+	r.input.cursorLine = 0
+}
+
+func (r *Renderer) renderInputLocked() {
+	if !r.input.active {
+		return
+	}
+	lines, cursorLine, cursorCol := r.inputLines()
+	for index, line := range lines {
+		if index > 0 {
+			fmt.Fprint(r.err, "\r\n")
+		}
+		fmt.Fprint(r.err, r.style(line, ansiSoftRed))
+	}
+	r.input.lines = len(lines)
+	r.input.cursorLine = cursorLine
+	fmt.Fprint(r.err, "\r")
+	linesUp := len(lines) - 1 - cursorLine
+	if linesUp > 0 {
+		fmt.Fprintf(r.err, "\x1b[%dA", linesUp)
+	}
+	if cursorCol > 0 {
+		fmt.Fprintf(r.err, "\x1b[%dC", cursorCol)
+	}
+}
+
+func (r *Renderer) inputLines() ([]string, int, int) {
+	width := r.width
+	if width < 20 {
+		width = 80
+	}
+	headerLines := wrapDisplay(r.input.header, width)
+	lines := append([]string(nil), headerLines...)
+	inputLines, cursorLine, cursorCol := renderInputBufferLines(r.input.prefix, r.input.buf, r.input.pos, width)
+	lines = append(lines, inputLines...)
+	return lines, len(headerLines) + cursorLine, cursorCol
+}
+
 // ─── Left-only box (no right border — avoids alignment issues) ─────
 
 func (r *Renderer) drawBoxTop() {
@@ -107,39 +237,121 @@ func (r *Renderer) drawBoxBottom() {
 }
 
 func (r *Renderer) Title(text string) {
-	fmt.Fprintln(r.out, r.style(text, ansiDeepRed))
+	r.writeWithInputPaused(r.out, func(w io.Writer) {
+		fmt.Fprintln(w, r.style(text, ansiDeepRed))
+	})
 }
 
 func (r *Renderer) Status(level, format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
 	line := fmt.Sprintf("%-8s %s", strings.ToUpper(level), message)
 	if strings.EqualFold(level, "FAIL") || strings.EqualFold(level, "WARN") || strings.EqualFold(level, "BLOCKED") {
-		fmt.Fprintln(r.err, r.style(line, ansiDeepRed))
+		r.writeWithInputPaused(r.err, func(w io.Writer) {
+			fmt.Fprintln(w, r.style(line, ansiDeepRed))
+		})
 		return
 	}
-	fmt.Fprintln(r.out, r.style(line, ansiWhite))
+	r.writeWithInputPaused(r.out, func(w io.Writer) {
+		fmt.Fprintln(w, r.style(line, ansiWhite))
+	})
 }
 
 func (r *Renderer) Prompt(mode, role string) {
-	if r.plain || !r.unicode {
-		fmt.Fprintf(r.out, "\nINPUT    USER [%s/%s]\n> ", mode, role)
-		return
-	}
-	label := fmt.Sprintf("INPUT  USER [%s/%s]  /help  /status", mode, role)
-	fmt.Fprintln(r.out, r.style("╭─ "+label, ansiSoftRed))
-	fmt.Fprint(r.out, r.style("╰─ ", ansiSoftRed))
+	header, prefix := r.inputLabels("INPUT", mode, role, "/help  /status")
+	r.startInput(header, prefix)
 }
 
 func (r *Renderer) RunningInputBar(mode, role string) {
+	header, prefix := r.inputLabels("GUIDE", mode, role, "输入引导后按 Enter；/cancel 或 Ctrl-C 取消")
+	r.startInput(header, prefix)
+}
+
+func (r *Renderer) inputLabels(kind, mode, role, hint string) (string, string) {
+	label := fmt.Sprintf("%s  USER [%s/%s]", kind, mode, role)
+	if kind == "GUIDE" {
+		label = fmt.Sprintf("%s  RUNNING [%s/%s]", kind, mode, role)
+	}
+	if hint != "" {
+		label += "  " + hint
+	}
 	if r.plain || !r.unicode {
-		fmt.Fprintf(r.err, "\nGUIDE    RUNNING [%s/%s]  输入引导后按 Enter；/cancel 或 Ctrl-C 取消\n", mode, role)
-		return
+		return label, "> "
 	}
-	label := fmt.Sprintf("GUIDE  RUNNING [%s/%s]  输入引导后按 Enter；/cancel 或 Ctrl-C 取消", mode, role)
-	for _, line := range wrapDisplay(label, r.width-3) {
-		fmt.Fprintln(r.err, r.style("╭─ "+line, ansiSoftRed))
+	return "╭─ " + label, "╰─ "
+}
+
+func (r *Renderer) ReadPromptLine(mode, role string) (string, error) {
+	terminalMu.Lock()
+	if err := enterRawTerminal(); err != nil {
+		terminalMu.Unlock()
+		header, prefix := r.inputLabels("INPUT", mode, role, "/help  /status")
+		r.writeWithInputPaused(r.out, func(w io.Writer) {
+			fmt.Fprintf(w, "\n%s\n%s", header, prefix)
+		})
+		return readTerminalLineFallback()
 	}
-	fmt.Fprintln(r.err, r.style("╰─", ansiSoftRed))
+	enableBracketedPaste()
+	terminalMu.Unlock()
+	defer func() {
+		terminalMu.Lock()
+		disableBracketedPaste()
+		exitRawTerminal()
+		terminalMu.Unlock()
+	}()
+
+	r.Prompt(mode, role)
+	defer r.finishInput()
+	return readLineRawWith(func(buf []rune, pos int) {
+		r.updateInput(buf, pos)
+	}, submitInputBufferQuiet)
+}
+
+func (r *Renderer) StartRunningInput(mode, role string) {
+	terminalMu.Lock()
+	if err := enterRawTerminal(); err == nil {
+		enableBracketedPaste()
+		r.runningInputTerminal = true
+	}
+	terminalMu.Unlock()
+	r.RunningInputBar(mode, role)
+}
+
+func (r *Renderer) StopRunningInput() {
+	r.finishInput()
+	terminalMu.Lock()
+	if r.runningInputTerminal {
+		disableBracketedPaste()
+		exitRawTerminal()
+		r.runningInputTerminal = false
+	}
+	terminalMu.Unlock()
+}
+
+func (r *Renderer) PollRunningInput() ([]string, bool, error) {
+	terminalMu.Lock()
+	chunk, err := readPendingTerminalBytes()
+	terminalMu.Unlock()
+	if err != nil || len(chunk) == 0 {
+		return nil, false, err
+	}
+	r.mu.Lock()
+	buf := append([]rune(nil), r.input.buf...)
+	pos := r.input.pos
+	r.mu.Unlock()
+	buf, pos, lines, interrupted, err := feedPendingInputBytes(buf, pos, chunk, func(next []rune, nextPos int) {
+		r.updateInput(next, nextPos)
+	})
+	r.mu.Lock()
+	if r.input.active {
+		r.input.buf = append(r.input.buf[:0], buf...)
+		r.input.pos = pos
+	}
+	r.mu.Unlock()
+	return lines, interrupted, err
+}
+
+func (r *Renderer) SuspendInputOverlay() func() {
+	return r.suspendInput()
 }
 
 // ─── Assistant box (streaming → box at end) ────────────────────────
@@ -159,29 +371,33 @@ func (r *Renderer) EndAssistant() {
 	if content == "" {
 		return
 	}
-	r.drawBoxTop()
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimRight(line, "\r")
-		r.drawBoxLine(r.style("●", ansiDeepRed) + " " + r.style(line, ansiPink))
-	}
-	r.drawBoxBottom()
+	r.writeWithInputPaused(r.out, func(io.Writer) {
+		r.drawBoxTop()
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimRight(line, "\r")
+			r.drawBoxLine(r.style("●", ansiDeepRed) + " " + r.style(line, ansiPink))
+		}
+		r.drawBoxBottom()
+	})
 	r.streamBuf.Reset()
 }
 
 // ─── User message box ──────────────────────────────────────────────
 
 func (r *Renderer) UserMessage(message string) {
-	if r.plain || !r.unicode {
-		fmt.Fprintf(r.out, "USER: %s\n", message)
-		return
-	}
-	r.drawBoxTop()
-	for _, line := range strings.Split(message, "\n") {
-		line = strings.TrimRight(line, "\r")
-		r.drawBoxLine(r.style("●", ansiWhite) + " " + line)
-	}
-	r.drawBoxBottom()
-	fmt.Fprintln(r.out)
+	r.writeWithInputPaused(r.out, func(io.Writer) {
+		if r.plain || !r.unicode {
+			fmt.Fprintf(r.out, "USER: %s\n", message)
+			return
+		}
+		r.drawBoxTop()
+		for _, line := range strings.Split(message, "\n") {
+			line = strings.TrimRight(line, "\r")
+			r.drawBoxLine(r.style("●", ansiWhite) + " " + line)
+		}
+		r.drawBoxBottom()
+		fmt.Fprintln(r.out)
+	})
 }
 
 // ─── Tool output (no box) ──────────────────────────────────────────
@@ -194,7 +410,9 @@ func (r *Renderer) Tool(name, status string, durationMS int64, exit string, trun
 	if truncated {
 		line += " truncated=true"
 	}
-	fmt.Fprintln(r.err, r.style(line, ansiDeepRed))
+	r.writeWithInputPaused(r.err, func(w io.Writer) {
+		fmt.Fprintln(w, r.style(line, ansiDeepRed))
+	})
 }
 
 func (r *Renderer) Confirm(prompt string) bool {
@@ -568,6 +786,68 @@ func wrapDisplay(text string, width int) []string {
 		lines = append(lines, builder.String())
 	}
 	return lines
+}
+
+func renderInputBufferLines(prefix string, buf []rune, pos int, width int) ([]string, int, int) {
+	if width < 1 {
+		width = 80
+	}
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(buf) {
+		pos = len(buf)
+	}
+	prefixWidth := displayWidth(prefix)
+	indent := strings.Repeat(" ", prefixWidth)
+	currentPrefix := prefix
+	line := currentPrefix
+	col := prefixWidth
+	lineIndex := 0
+	cursorLine, cursorCol := 0, prefixWidth
+	cursorSet := false
+	var lines []string
+
+	flush := func() {
+		lines = append(lines, line)
+		lineIndex++
+		currentPrefix = indent
+		line = currentPrefix
+		col = prefixWidth
+	}
+	markCursor := func() {
+		if cursorSet {
+			return
+		}
+		cursorLine = lineIndex
+		cursorCol = col
+		cursorSet = true
+	}
+
+	if len(buf) == 0 {
+		return []string{prefix}, 0, prefixWidth
+	}
+	for index, char := range buf {
+		if index == pos {
+			markCursor()
+		}
+		if char == '\n' {
+			flush()
+			continue
+		}
+		charText := string(char)
+		charWidth := displayWidth(charText)
+		if col > prefixWidth && col+charWidth > width {
+			flush()
+		}
+		line += charText
+		col += charWidth
+	}
+	if pos == len(buf) {
+		markCursor()
+	}
+	lines = append(lines, line)
+	return lines, cursorLine, cursorCol
 }
 
 // Braille cells preserve an 80x80 dot sampling of docs/logo.png in only 40x20

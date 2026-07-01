@@ -178,22 +178,34 @@ func TestReadApprovalChoiceClearsFromLineStartOnRepeatedRedraw(t *testing.T) {
 	}
 }
 
-func TestSplitPendingInputLinesKeepsPartialLine(t *testing.T) {
-	rest, lines := splitPendingInputLines("hel", "lo\n/cancel\r\nnext")
-	if rest != "next" {
-		t.Fatalf("partial line mismatch: %q", rest)
-	}
-	if strings.Join(lines, "|") != "hello|/cancel" {
-		t.Fatalf("lines mismatch: %#v", lines)
-	}
-}
-
 func TestBuildRunningGuidanceMessage(t *testing.T) {
 	message := buildRunningGuidanceMessage([]string{"改为只读检查", "不要删除文件"})
 	for _, want := range []string{"运行过程中追加", "- 改为只读检查", "- 不要删除文件"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("guidance message missing %q: %s", want, message)
 		}
+	}
+}
+
+func TestFeedPendingInputBytesSubmitsAndRedraws(t *testing.T) {
+	var redraws []string
+	buf, pos, lines, interrupted, err := feedPendingInputBytes(nil, 0, []byte("hello世界\r"), func(buf []rune, pos int) {
+		redraws = append(redraws, string(runesToBytes(buf)))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted {
+		t.Fatal("did not expect interrupt")
+	}
+	if len(buf) != 0 || pos != 0 {
+		t.Fatalf("buffer should reset after submit, got %q pos=%d", string(runesToBytes(buf)), pos)
+	}
+	if strings.Join(lines, "|") != "hello世界" {
+		t.Fatalf("submitted lines mismatch: %#v", lines)
+	}
+	if len(redraws) == 0 || redraws[len(redraws)-1] != "" {
+		t.Fatalf("expected final redraw to clear input, got %#v", redraws)
 	}
 }
 

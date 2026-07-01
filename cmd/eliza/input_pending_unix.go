@@ -9,17 +9,17 @@ import (
 	"golang.org/x/term"
 )
 
-func readPendingTerminalInput() (string, error) {
+func readPendingTerminalBytes() ([]byte, error) {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
-		return "", nil
+		return nil, nil
 	}
 	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := unix.SetNonblock(fd, true); err != nil {
-		return "", err
+		return nil, err
 	}
 	defer unix.FcntlInt(uintptr(fd), unix.F_SETFL, flags)
 
@@ -42,7 +42,7 @@ func readPendingTerminalInput() (string, error) {
 		if err == unix.EINTR {
 			continue
 		}
-		return string(out), err
+		return out, err
 	}
-	return string(out), nil
+	return out, nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"regexp"
@@ -38,6 +39,10 @@ func readLineInput() (string, error) {
 }
 
 func readLineRaw() (string, error) {
+	return readLineRawWith(redrawLine, submitInputBuffer)
+}
+
+func readLineRawWith(redraw func([]rune, int), submit func([]rune) (string, error)) (string, error) {
 	var buf []rune
 	pos := 0
 	fd := os.Stdin
@@ -66,14 +71,14 @@ func readLineRaw() (string, error) {
 				dirtyBurstInput = true
 				continue
 			}
-			return submitInputBuffer(buf)
+			return submit(buf)
 
 		case b == 127:
 			collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
 			if pos > 0 {
 				pos--
 				buf = append(buf[:pos], buf[pos+1:]...)
-				redrawLine(buf, pos)
+				redraw(buf, pos)
 			}
 
 		case b == 27:
@@ -90,42 +95,42 @@ func readLineRaw() (string, error) {
 				}
 				insertPaste(&buf, &pos, pasted)
 				dirtyBurstInput = false
-				redrawLine(buf, pos)
+				redraw(buf, pos)
 			case "[D":
 				if pos > 0 {
 					pos--
-					redrawLine(buf, pos)
+					redraw(buf, pos)
 				}
 			case "[C":
 				if pos < len(buf) {
 					pos++
-					redrawLine(buf, pos)
+					redraw(buf, pos)
 				}
 			case "[H":
 				pos = 0
-				redrawLine(buf, pos)
+				redraw(buf, pos)
 			case "[F":
 				pos = len(buf)
-				redrawLine(buf, pos)
+				redraw(buf, pos)
 			case "[3~":
 				if pos < len(buf) {
 					buf = append(buf[:pos], buf[pos+1:]...)
-					redrawLine(buf, pos)
+					redraw(buf, pos)
 				}
 			}
 
 		case b == 1:
 			collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
 			pos = 0
-			redrawLine(buf, pos)
+			redraw(buf, pos)
 		case b == 5:
 			collapseBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput)
 			pos = len(buf)
-			redrawLine(buf, pos)
+			redraw(buf, pos)
 		case b == 21:
 			buf = nil
 			pos = 0
-			redrawLine(buf, pos)
+			redraw(buf, pos)
 
 		case b >= 32 && b <= 126:
 			collapseIdleBurstBufferForDisplay(&buf, &pos, &dirtyBurstInput, gap)
@@ -133,7 +138,7 @@ func readLineRaw() (string, error) {
 			if dirtyBurstInput {
 				continue
 			}
-			redrawLine(buf, pos)
+			redraw(buf, pos)
 
 		case b == '\n':
 			insertText(&buf, &pos, "\n")
@@ -149,7 +154,7 @@ func readLineRaw() (string, error) {
 			if dirtyBurstInput {
 				continue
 			}
-			redrawLine(buf, pos)
+			redraw(buf, pos)
 		}
 	}
 }
@@ -214,10 +219,31 @@ func readApprovalChoiceRaw(render func(int) int, optionCount int) (int, error) {
 }
 
 func submitInputBuffer(buf []rune) (string, error) {
-	content := strings.TrimRight(string(runesToBytes(buf)), "\n")
+	content, filePath, err := submitInputContent(buf)
+	if err != nil {
+		return "", err
+	}
 	if content == "" {
 		fmt.Fprint(os.Stderr, "\r\n")
 		return "", nil
+	}
+	if filePath != "" {
+		fmt.Fprintf(os.Stderr, "\r\n[FILE] %s\r\n", filePath)
+		return content, nil
+	}
+	fmt.Fprint(os.Stderr, "\r\n")
+	return content, nil
+}
+
+func submitInputBufferQuiet(buf []rune) (string, error) {
+	content, _, err := submitInputContent(buf)
+	return content, err
+}
+
+func submitInputContent(buf []rune) (string, string, error) {
+	content := strings.TrimRight(string(runesToBytes(buf)), "\n")
+	if content == "" {
+		return "", "", nil
 	}
 
 	content, cleanup := expandPasteReferences(content)
@@ -228,14 +254,144 @@ func submitInputBuffer(buf []rune) (string, error) {
 	if shouldStoreInputAsFile(content) {
 		path, err := writeStdinTempFile(content)
 		if err != nil {
-			return "", fmt.Errorf("write temp input file: %w", err)
+			return "", "", fmt.Errorf("write temp input file: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "\r\n[FILE] %s\r\n", path)
-		return "FILE:" + path, nil
+		return "FILE:" + path, path, nil
 	}
 
-	fmt.Fprint(os.Stderr, "\r\n")
-	return content, nil
+	return content, "", nil
+}
+
+func feedPendingInputBytes(buf []rune, pos int, chunk []byte, redraw func([]rune, int)) ([]rune, int, []string, bool, error) {
+	var submitted []string
+	interrupted := false
+	for index := 0; index < len(chunk); {
+		b := chunk[index]
+		switch {
+		case b == 3:
+			interrupted = true
+			index++
+
+		case b == 13:
+			content, err := submitInputBufferQuiet(buf)
+			if err != nil {
+				return buf, pos, submitted, interrupted, err
+			}
+			if strings.TrimSpace(content) != "" {
+				submitted = append(submitted, content)
+			}
+			buf = nil
+			pos = 0
+			redraw(buf, pos)
+			index++
+
+		case b == '\n':
+			insertText(&buf, &pos, "\n")
+			redraw(buf, pos)
+			index++
+
+		case b == 127:
+			if pos > 0 {
+				pos--
+				buf = append(buf[:pos], buf[pos+1:]...)
+				redraw(buf, pos)
+			}
+			index++
+
+		case b == 27:
+			advanced := false
+			if bytes.HasPrefix(chunk[index:], []byte("\x1b[200~")) {
+				start := index + len("\x1b[200~")
+				if end := bytes.Index(chunk[start:], []byte(bracketedPasteEnd)); end >= 0 {
+					pasted := string(chunk[start : start+end])
+					insertPaste(&buf, &pos, pasted)
+					redraw(buf, pos)
+					index = start + end + len(bracketedPasteEnd)
+					advanced = true
+				}
+			}
+			if !advanced {
+				seq, consumed := pendingEscSequence(chunk[index:])
+				if consumed <= 0 {
+					index++
+					continue
+				}
+				switch seq {
+				case "[D":
+					if pos > 0 {
+						pos--
+						redraw(buf, pos)
+					}
+				case "[C":
+					if pos < len(buf) {
+						pos++
+						redraw(buf, pos)
+					}
+				case "[H":
+					pos = 0
+					redraw(buf, pos)
+				case "[F":
+					pos = len(buf)
+					redraw(buf, pos)
+				case "[3~":
+					if pos < len(buf) {
+						buf = append(buf[:pos], buf[pos+1:]...)
+						redraw(buf, pos)
+					}
+				}
+				index += consumed
+			}
+
+		case b == 1:
+			pos = 0
+			redraw(buf, pos)
+			index++
+		case b == 5:
+			pos = len(buf)
+			redraw(buf, pos)
+			index++
+		case b == 21:
+			buf = nil
+			pos = 0
+			redraw(buf, pos)
+			index++
+
+		case b >= 32 && b <= 126:
+			insertText(&buf, &pos, string(rune(b)))
+			redraw(buf, pos)
+			index++
+
+		case b >= 128:
+			r, size := utf8.DecodeRune(chunk[index:])
+			if r == utf8.RuneError && size <= 1 {
+				index++
+				continue
+			}
+			insertText(&buf, &pos, string(r))
+			redraw(buf, pos)
+			index += size
+
+		default:
+			index++
+		}
+	}
+	return buf, pos, submitted, interrupted, nil
+}
+
+func pendingEscSequence(chunk []byte) (string, int) {
+	if len(chunk) < 2 || chunk[0] != 27 {
+		return "", 0
+	}
+	if chunk[1] != '[' && chunk[1] != 'O' {
+		return string(chunk[1:2]), 2
+	}
+	limit := min(len(chunk), 6)
+	for index := 2; index < limit; index++ {
+		if chunk[index] >= 0x40 && chunk[index] <= 0x7E {
+			return string(chunk[1 : index+1]), index + 1
+		}
+	}
+	return "", 0
 }
 
 func insertPaste(buf *[]rune, pos *int, pasted string) {

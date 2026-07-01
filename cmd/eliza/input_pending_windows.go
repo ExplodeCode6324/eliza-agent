@@ -2,6 +2,6 @@
 
 package main
 
-func readPendingTerminalInput() (string, error) {
-	return "", nil
+func readPendingTerminalBytes() ([]byte, error) {
+	return nil, nil
 }

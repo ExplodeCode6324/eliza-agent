@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -53,7 +54,6 @@ type Agent struct {
 	requestMu                                                           sync.Mutex
 	currentCtx                                                          context.Context
 	currentCancel                                                       context.CancelFunc
-	runningInputBuffer                                                  string
 	pendingGuidance                                                     []string
 }
 
@@ -125,8 +125,7 @@ func (a *Agent) RunInteractive() error {
 		a.ui.Status("WARN", "请向我描述你自己和项目背景，我会引导你完成初始化")
 	}
 	for {
-		a.ui.Prompt(a.registry.Mode(), a.roleName)
-		line, err := readTerminalLine()
+		line, err := a.ui.ReadPromptLine(a.registry.Mode(), a.roleName)
 		if err != nil && line == "" {
 			return nil
 		}
@@ -247,16 +246,18 @@ func (a *Agent) RunInteractive() error {
 			continue
 		}
 		a.prepareMessages(input)
-		a.ui.RunningInputBar(a.registry.Mode(), a.roleName)
+		a.ui.StartRunningInput(a.registry.Mode(), a.roleName)
 		if err := a.processLoop(false); err != nil {
+			a.ui.StopRunningInput()
 			a.ui.Status("FAIL", "当前请求失败: %v", err)
+		} else {
+			a.ui.StopRunningInput()
 		}
 	}
 }
 
 func (a *Agent) processLoop(singleShot bool) error {
 	runtimeState := &RequestRuntime{ID: "req_" + randomID(), State: LoopPreparing, StartedAt: time.Now()}
-	a.runningInputBuffer = ""
 	a.pendingGuidance = nil
 	a.sessionRequests++
 	for index := len(a.messages) - 1; index >= 0; index-- {
@@ -646,19 +647,16 @@ func (a *Agent) collectRunningInput(requestID string) bool {
 	if !a.interactive {
 		return false
 	}
-	terminalMu.Lock()
-	chunk, err := readPendingTerminalInput()
-	terminalMu.Unlock()
+	lines, interrupted, err := a.ui.PollRunningInput()
 	if err != nil {
 		a.ui.Status("WARN", "运行中输入读取失败: %v", err)
 		return false
 	}
-	if chunk == "" && a.runningInputBuffer == "" {
-		return false
+	cancelRequested := interrupted
+	if interrupted {
+		a.ui.Status("WARN", "当前请求取消中")
+		a.CancelCurrent()
 	}
-	var lines []string
-	a.runningInputBuffer, lines = splitPendingInputLines(a.runningInputBuffer, chunk)
-	cancelRequested := false
 	for _, line := range lines {
 		input := strings.TrimSpace(line)
 		if input == "" {
@@ -685,23 +683,6 @@ func (a *Agent) collectRunningInput(requestID string) bool {
 		}
 	}
 	return cancelRequested
-}
-
-func splitPendingInputLines(buffer, chunk string) (string, []string) {
-	if chunk == "" && buffer == "" {
-		return "", nil
-	}
-	combined := buffer + chunk
-	combined = strings.ReplaceAll(combined, "\r\n", "\n")
-	combined = strings.ReplaceAll(combined, "\r", "\n")
-	parts := strings.Split(combined, "\n")
-	if strings.HasSuffix(combined, "\n") {
-		return "", parts[:len(parts)-1]
-	}
-	if len(parts) == 1 {
-		return parts[0], nil
-	}
-	return parts[len(parts)-1], parts[:len(parts)-1]
 }
 
 func (a *Agent) injectPendingGuidance(requestID string) bool {
@@ -774,7 +755,9 @@ func (a *Agent) showStatus() {
 	if a.plan != nil {
 		planStatus = string(a.plan.Status)
 	}
-	fmt.Fprintf(a.ui.out, "request_count=%d total_steps=%d messages=%d\nlast_request=%s steps=%d tool_calls=%d\ncontext=%s/%s %.1f%%%s\nmode=%s role=%s plan=%s streaming=forced\ncompaction=%d/%d success=%d\n", a.sessionRequests, a.totalSteps, len(a.messages), valueOrUnknown(string(a.lastRequestState)), a.lastRequestSteps, a.lastRequestToolCalls, formatTokens(used), formatTokens(a.config.Model.ContextWindow), pct, estimated, a.registry.Mode(), a.roleName, planStatus, a.compactionAttempts, a.compressCfg.MaxCount, a.compactionCount)
+	a.ui.writeWithInputPaused(a.ui.out, func(w io.Writer) {
+		fmt.Fprintf(w, "request_count=%d total_steps=%d messages=%d\nlast_request=%s steps=%d tool_calls=%d\ncontext=%s/%s %.1f%%%s\nmode=%s role=%s plan=%s streaming=forced\ncompaction=%d/%d success=%d\n", a.sessionRequests, a.totalSteps, len(a.messages), valueOrUnknown(string(a.lastRequestState)), a.lastRequestSteps, a.lastRequestToolCalls, formatTokens(used), formatTokens(a.config.Model.ContextWindow), pct, estimated, a.registry.Mode(), a.roleName, planStatus, a.compactionAttempts, a.compressCfg.MaxCount, a.compactionCount)
+	})
 }
 func (a *Agent) showTUIHelp() {
 	planStatus := "none"
@@ -851,6 +834,8 @@ func (a *Agent) approvalLoop(prompt string) ApprovalResult {
 	if !a.interactive {
 		return approvalDenied()
 	}
+	restoreInput := a.ui.SuspendInputOverlay()
+	defer restoreInput()
 	selected, err := readApprovalChoice(func(selected int) int {
 		return a.ui.ApprovalBox(prompt, selected)
 	}, len(approvalOptions))
@@ -876,8 +861,7 @@ func (a *Agent) approvalResultFromSelection(selected int) ApprovalResult {
 		return approvalGranted()
 	case 2:
 		a.ui.Status("BLOCKED", "Tell ELIZA what to do instead (empty = deny only)")
-		a.ui.Prompt(a.registry.Mode(), a.roleName)
-		line, err := readTerminalLine()
+		line, err := a.ui.ReadPromptLine(a.registry.Mode(), a.roleName)
 		if err != nil && line == "" {
 			return approvalDenied()
 		}

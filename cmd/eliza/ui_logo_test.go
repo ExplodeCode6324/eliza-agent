@@ -197,6 +197,38 @@ func TestPromptAndRunningInputBarAreVisible(t *testing.T) {
 	}
 }
 
+func TestRenderInputBufferLinesWrapsSoftLines(t *testing.T) {
+	lines, cursorLine, cursorCol := renderInputBufferLines("╰─ ", []rune("现在是功能测试。去浏览一下baidu.com"), len([]rune("现在是功能测试。去浏览一下baidu.com")), 24)
+	if len(lines) < 2 {
+		t.Fatalf("expected soft wrapping, got %#v", lines)
+	}
+	for _, line := range lines {
+		if displayWidth(line) > 24 {
+			t.Fatalf("input line overflowed: width=%d line=%q", displayWidth(line), line)
+		}
+	}
+	if cursorLine != len(lines)-1 {
+		t.Fatalf("cursor should be on last soft line: cursor=%d lines=%d", cursorLine, len(lines))
+	}
+	if cursorCol <= 0 || cursorCol > 24 {
+		t.Fatalf("cursor col out of range: %d", cursorCol)
+	}
+}
+
+func TestStatusRedrawsActiveInputOverlay(t *testing.T) {
+	var output bytes.Buffer
+	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 48}
+
+	renderer.Prompt(ModeAutopilot, "default")
+	renderer.updateInput([]rune("partial input"), len([]rune("partial input")))
+	renderer.Status("RUNNING", "step 2")
+
+	text := output.String()
+	if !strings.Contains(text, "\x1b[0J") || !strings.Contains(text, "RUNNING  step 2") || !strings.Contains(text, "partial input") {
+		t.Fatalf("status did not clear and redraw input overlay: %q", text)
+	}
+}
+
 func containsBareLF(text string) bool {
 	for index := 0; index < len(text); index++ {
 		if text[index] == '\n' && (index == 0 || text[index-1] != '\r') {
