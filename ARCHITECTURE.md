@@ -11,7 +11,7 @@ CLI main.go
   ├─ early help/version
   ├─ read-only doctor.go
   └─ runtime initialization
-       ├─ ui.go / contextbar.go
+       ├─ ui.go / ui_events.go / ui_components.go / contextbar.go
        ├─ agent.go request state machine
        │    ├─ llm.go SSE-only client
        │    ├─ tools.go ToolRegistry + Tool interface + FilePolicy + CommandPolicy

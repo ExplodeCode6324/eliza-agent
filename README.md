@@ -8,7 +8,14 @@ v0.9.0 · CGO_ENABLED=0 · 内置无头 Chromium 浏览器 · 首个稳定版本
 
 ## 近期更新
 
-**2026-07-01 · v0.9.0 首个稳定版本**
+**2026-07-01 · v0.9.0 TUI 重构**
+
+- TUI 层重构为事件驱动架构：`ui_events.go` 定义 9 种 UIEvent + 3 种 UICommand，Agent 逻辑与渲染器通过事件解耦。
+- 新增声明式 UI 组件（`ui_components.go`）：Message / Status / ToolCall / InputBar / Approval，每组件返回预包装行列表，支持窄终端自动换行。
+- 新增 PTY 真实终端测试（`tui_pty_unix_test.go`）：覆盖光标移动、退格删除、CJK 输入、CRLF 保证。
+- 新增 `edit_file` + `glob` 工具，对标 Claude Code/Codex CLI，工具集 15 个。
+
+**2026-06-30 · 无头浏览器**
 
 - 可选择式审批框：危险操作用 `↑/↓` 键选择 + `Enter` 确认，替代 `/approve` `/deny` 斜杠命令。默认拒绝，批准只对本次操作生效；拒绝时可补充新要求让 ELIZA 调整方案。
 - 输入体验全面升级：bracketed paste 协议支持、多行粘贴自动折叠为临时文件、中文输入法即时显示、统一用 `golang.org/x/term` 替代平台分叉实现。
@@ -202,6 +209,8 @@ Memory 和 Skill 内容注入时标注 UNTRUSTED SOURCE。LLM 可读取参考，
 | `compress.go` | Context Compaction、Emergency Summary |
 | `worklog.go` | 会话审计（session.md + events.jsonl） |
 | `ui.go` | 终端渲染（Braille Logo、框线、配色、审批框） |
+| `ui_events.go` | 事件驱动层（UIEvent/UICommand/AgentUI），解耦 Agent 与 Renderer |
+| `ui_components.go` | 声明式 UI 组件（Message/Status/ToolCall/InputBar/Approval） |
 | `input.go` | 终端输入（CJK 安全、粘贴检测、bracketed paste） |
 | `terminal.go` | 跨平台 raw terminal（golang.org/x/term） |
 | `doctor.go` | `--doctor` 自检（DNS/TCP/TLS/HTTP） |

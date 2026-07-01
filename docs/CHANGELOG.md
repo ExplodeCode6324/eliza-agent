@@ -4,6 +4,7 @@
 
 - **首个稳定运行版本。** 核心架构、工具集、输入体验和安全策略已通过真实环境验证。
 - **工具注册表标准化：** 新增 ToolRegistry + Tool 接口体系（8 个接口），统一注册/授权/审批/执行管线。定义 4 种 ToolProfile 支持按场景裁剪。所有工具重构为标准接口实现。
+- **TUI 重构为事件驱动架构：** 新增 `ui_events.go`（9 种 UIEvent + 3 种 UICommand）和 `ui_components.go`（5 种声明式组件），Agent 逻辑与渲染器通过事件解耦。新增 PTY 真实终端测试。UI 层从单文件拆为 3 文件 + 测试。
 - **新增 edit_file + glob 工具：** 对标 Claude Code/Codex CLI，edit_file 精确文本替换（仅改匹配处，不动其余部分），glob 模式匹配文件查找。工具集从 13 个增至 15 个。
 - 新增无头 Chromium 浏览器：基于 chromedp，7 个浏览器工具，零外部运行时依赖。readonly 模式开放只读操作。
 - 新增可选择式审批框：↑/↓ 选择 + Enter 确认替代 /approve /deny。默认拒绝，可拒绝并提供指引。
