@@ -130,41 +130,55 @@ func TestReadLineRawRedrawsFastCJKCommit(t *testing.T) {
 }
 
 func TestReadApprovalChoiceDefaultsToRejectOnEnter(t *testing.T) {
-	got := readApprovalChoiceForTest(t, "\r")
+	got, _ := readApprovalChoiceForTest(t, "\r")
 	if got != 0 {
 		t.Fatalf("expected default reject option, got %d", got)
 	}
 }
 
 func TestReadApprovalChoiceArrowDownSelectsApprove(t *testing.T) {
-	got := readApprovalChoiceForTest(t, "\x1b[B\r")
+	got, _ := readApprovalChoiceForTest(t, "\x1b[B\r")
 	if got != 1 {
 		t.Fatalf("expected approve option after ArrowDown, got %d", got)
 	}
 }
 
 func TestReadApprovalChoiceApplicationCursorDownSelectsApprove(t *testing.T) {
-	got := readApprovalChoiceForTest(t, "\x1bOB\r")
+	got, _ := readApprovalChoiceForTest(t, "\x1bOB\r")
 	if got != 1 {
 		t.Fatalf("expected approve option after application cursor ArrowDown, got %d", got)
 	}
 }
 
 func TestReadApprovalChoiceArrowUpWrapsToGuidance(t *testing.T) {
-	got := readApprovalChoiceForTest(t, "\x1b[A\r")
+	got, _ := readApprovalChoiceForTest(t, "\x1b[A\r")
 	if got != 2 {
 		t.Fatalf("expected guidance option after ArrowUp wrap, got %d", got)
 	}
 }
 
 func TestReadApprovalChoiceCtrlCRejects(t *testing.T) {
-	got := readApprovalChoiceForTest(t, string([]byte{3}))
+	got, _ := readApprovalChoiceForTest(t, string([]byte{3}))
 	if got != 0 {
 		t.Fatalf("expected Ctrl-C to reject, got %d", got)
 	}
 }
 
-func readApprovalChoiceForTest(t *testing.T, input string) int {
+func TestReadApprovalChoiceClearsFromLineStartOnRepeatedRedraw(t *testing.T) {
+	got, output := readApprovalChoiceForTest(t, "\x1b[B\x1b[A\x1b[B\r")
+	if got != 1 {
+		t.Fatalf("expected final approve option, got %d", got)
+	}
+	clearSequence := "\r\x1b[1A\x1b[0J"
+	if strings.Count(output, clearSequence) != 3 {
+		t.Fatalf("expected three line-start clear sequences, got output %q", output)
+	}
+	if strings.Contains(output, "\x1b[1A\x1b[0J") && strings.Count(output, clearSequence) != strings.Count(output, "\x1b[1A\x1b[0J") {
+		t.Fatalf("found clear sequence without leading carriage return: %q", output)
+	}
+}
+
+func readApprovalChoiceForTest(t *testing.T, input string) (int, string) {
 	t.Helper()
 	oldStdin := os.Stdin
 	oldStderr := os.Stderr
@@ -193,7 +207,14 @@ func readApprovalChoiceForTest(t *testing.T, input string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return got
+	if _, err := stderrFile.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(stderrFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got, string(output)
 }
 
 func removeAll(paths []string) {

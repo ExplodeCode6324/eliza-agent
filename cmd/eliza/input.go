@@ -176,7 +176,7 @@ func readApprovalChoiceRaw(render func(int) int, optionCount int) (int, error) {
 	renderedLines := 0
 	redraw := func() {
 		if renderedLines > 0 {
-			fmt.Fprintf(os.Stderr, "\x1b[%dA\x1b[0J", renderedLines)
+			fmt.Fprintf(os.Stderr, "\r\x1b[%dA\x1b[0J", renderedLines)
 		}
 		renderedLines = render(selected)
 	}

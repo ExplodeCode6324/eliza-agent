@@ -138,3 +138,27 @@ func TestApprovalBoxFramesOptionsWithoutSlashCommands(t *testing.T) {
 		t.Fatalf("approval prompt still references slash commands: %q", text)
 	}
 }
+
+func TestApprovalBoxUsesCRLFLineEndingsForRawMode(t *testing.T) {
+	var output bytes.Buffer
+	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 72}
+
+	renderer.ApprovalBox("危险命令: rm file.txt", 0)
+	text := output.String()
+
+	if strings.Contains(text, "\n") && containsBareLF(text) {
+		t.Fatalf("approval prompt contains bare LF in raw-mode output: %q", text)
+	}
+	if !strings.Contains(text, "\r\n") {
+		t.Fatalf("approval prompt did not use CRLF line endings: %q", text)
+	}
+}
+
+func containsBareLF(text string) bool {
+	for index := 0; index < len(text); index++ {
+		if text[index] == '\n' && (index == 0 || text[index-1] != '\r') {
+			return true
+		}
+	}
+	return false
+}

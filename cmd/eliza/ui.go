@@ -202,19 +202,26 @@ func (r *Renderer) ApprovalBox(prompt string, selected int) int {
 	inner := width - 4
 	lines := r.approvalBoxLines(prompt, selected, inner)
 	borderWidth := inner + 2
+	var builder strings.Builder
 	if r.plain || !r.unicode {
-		fmt.Fprintln(r.err, "+"+strings.Repeat("-", borderWidth)+"+")
+		builder.WriteString("+" + strings.Repeat("-", borderWidth) + "+\r\n")
 		for _, line := range lines {
-			r.approvalPlainLine(line, inner)
+			builder.WriteString(r.approvalPlainLine(line, inner))
+			builder.WriteString("\r\n")
 		}
-		fmt.Fprintln(r.err, "+"+strings.Repeat("-", borderWidth)+"+")
+		builder.WriteString("+" + strings.Repeat("-", borderWidth) + "+\r\n")
+		fmt.Fprint(r.err, builder.String())
 		return len(lines) + 2
 	}
-	fmt.Fprintln(r.err, r.style("╭"+strings.Repeat("─", borderWidth)+"╮", ansiSoftRed))
+	builder.WriteString(r.style("╭"+strings.Repeat("─", borderWidth)+"╮", ansiSoftRed))
+	builder.WriteString("\r\n")
 	for _, line := range lines {
-		r.approvalStyledLine(line, inner)
+		builder.WriteString(r.approvalStyledLine(line, inner))
+		builder.WriteString("\r\n")
 	}
-	fmt.Fprintln(r.err, r.style("╰"+strings.Repeat("─", borderWidth)+"╯", ansiSoftRed))
+	builder.WriteString(r.style("╰"+strings.Repeat("─", borderWidth)+"╯", ansiSoftRed))
+	builder.WriteString("\r\n")
+	fmt.Fprint(r.err, builder.String())
 	return len(lines) + 2
 }
 
@@ -241,16 +248,16 @@ func (r *Renderer) approvalBoxLines(prompt string, selected int, width int) []st
 	return lines
 }
 
-func (r *Renderer) approvalPlainLine(raw string, width int) {
+func (r *Renderer) approvalPlainLine(raw string, width int) string {
 	raw = truncateDisplay(raw, width)
 	padding := width - displayWidth(raw)
 	if padding < 0 {
 		padding = 0
 	}
-	fmt.Fprintln(r.err, "| "+raw+strings.Repeat(" ", padding)+" |")
+	return "| " + raw + strings.Repeat(" ", padding) + " |"
 }
 
-func (r *Renderer) approvalStyledLine(raw string, width int) {
+func (r *Renderer) approvalStyledLine(raw string, width int) string {
 	raw = truncateDisplay(raw, width)
 	padding := width - displayWidth(raw)
 	if padding < 0 {
@@ -260,9 +267,7 @@ func (r *Renderer) approvalStyledLine(raw string, width int) {
 	if strings.HasPrefix(raw, "> ") || raw == "审批请求" {
 		color = ansiWhite
 	}
-	fmt.Fprint(r.err, r.style("│ ", ansiSoftRed))
-	fmt.Fprint(r.err, r.style(raw, color)+strings.Repeat(" ", padding))
-	fmt.Fprintln(r.err, r.style(" │", ansiSoftRed))
+	return r.style("│ ", ansiSoftRed) + r.style(raw, color) + strings.Repeat(" ", padding) + r.style(" │", ansiSoftRed)
 }
 
 // ─── Banner ────────────────────────────────────────────────────────
