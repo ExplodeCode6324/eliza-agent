@@ -859,13 +859,44 @@ func displayEndpoint(raw string) string {
 func displayWidth(text string) int {
 	width := 0
 	for _, char := range text {
-		if unicode.Is(unicode.Han, char) || unicode.Is(unicode.Hangul, char) || unicode.Is(unicode.Hiragana, char) || unicode.Is(unicode.Katakana, char) {
-			width += 2
-		} else if !unicode.Is(unicode.Mn, char) {
-			width++
-		}
+		width += runeDisplayWidth(char)
 	}
 	return width
+}
+
+func runeDisplayWidth(char rune) int {
+	if char == 0 || char == '\r' || char == '\n' {
+		return 0
+	}
+	if char < 32 || (char >= 0x7f && char < 0xa0) {
+		return 0
+	}
+	if unicode.Is(unicode.Mn, char) || unicode.Is(unicode.Me, char) ||
+		char == 0x200d ||
+		(char >= 0xfe00 && char <= 0xfe0f) ||
+		(char >= 0xe0100 && char <= 0xe01ef) {
+		return 0
+	}
+	if isWideDisplayRune(char) {
+		return 2
+	}
+	return 1
+}
+
+func isWideDisplayRune(char rune) bool {
+	return char >= 0x1100 && (char <= 0x115f ||
+		char == 0x2329 ||
+		char == 0x232a ||
+		(char >= 0x2e80 && char <= 0xa4cf && char != 0x303f) ||
+		(char >= 0xac00 && char <= 0xd7a3) ||
+		(char >= 0xf900 && char <= 0xfaff) ||
+		(char >= 0xfe10 && char <= 0xfe19) ||
+		(char >= 0xfe30 && char <= 0xfe6f) ||
+		(char >= 0xff00 && char <= 0xff60) ||
+		(char >= 0xffe0 && char <= 0xffe6) ||
+		(char >= 0x1f300 && char <= 0x1f64f) ||
+		(char >= 0x1f900 && char <= 0x1f9ff) ||
+		(char >= 0x20000 && char <= 0x3fffd))
 }
 
 func wrapDisplay(text string, width int) []string {

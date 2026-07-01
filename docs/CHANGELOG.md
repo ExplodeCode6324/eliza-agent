@@ -8,6 +8,7 @@
 - 交互运行中可继续输入引导，ELIZA 会在 LLM/tool 安全点注入下一轮；`/cancel` 或 Ctrl-C 可取消当前请求。
 - 输入栏改由 Renderer 管理为轻量常驻区域；idle/running 状态分别显示 INPUT/GUIDE，并在工具/状态输出时自动隐藏和恢复，避免长输入换行重复渲染或运行中输入被截断。
 - 修复 running raw mode 下普通输出使用裸 `\n` 导致 UI 逐行右移的问题；TUI 输出统一由 Renderer 规范换行、隐藏/恢复输入浮层，并动态刷新终端宽度。
+- 修复中文/全角标点输入时光标列计算偏差：display width 覆盖 East Asian Wide/Fullwidth 范围，避免 `，。！？（）` 等字符让光标落后。
 - 浏览器工具恢复操作级 timeout/cancel 兜底，超时或取消后重置无头浏览器会话，避免失败后卡死。
 
 ## v0.8.0 (2026-06-30) — Headless Chromium Browser

@@ -215,6 +215,26 @@ func TestRenderInputBufferLinesWrapsSoftLines(t *testing.T) {
 	}
 }
 
+func TestDisplayWidthCountsChineseFullwidthPunctuation(t *testing.T) {
+	input := "你，好。！？：（）【】《》"
+	want := 26
+	if got := displayWidth(input); got != want {
+		t.Fatalf("displayWidth(%q)=%d, want %d", input, got, want)
+	}
+}
+
+func TestInputCursorTracksChineseFullwidthPunctuation(t *testing.T) {
+	input := []rune("你，好。")
+	lines, cursorLine, cursorCol := renderInputBufferLines("╰─ ", input, len(input), 80)
+
+	if len(lines) != 1 || cursorLine != 0 {
+		t.Fatalf("unexpected input render lines=%#v cursorLine=%d", lines, cursorLine)
+	}
+	if cursorCol != 11 {
+		t.Fatalf("cursor column should count Chinese punctuation as fullwidth: got %d line=%q", cursorCol, lines[0])
+	}
+}
+
 func TestStatusRedrawsActiveInputOverlay(t *testing.T) {
 	var output bytes.Buffer
 	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 48}
