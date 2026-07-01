@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## v0.8.0 (2026-07-01) — Selectable Approval Prompt
+
+- 新增可选择式审批框：↑/↓ 切换选项，Enter 确认。默认拒绝，批准只对本次操作生效。
+- 拒绝时可补充新的执行要求，让 ELIZA 调整后续方案。
+- 审批框重绘稳定化：`\r` 光标复位 + strings.Builder 原子输出，消除箭头切换时的视觉残留。
+
+## v0.8.0 (2026-06-30) — Headless Chromium Browser
+
+- 基于 Go chromedp 内置 7 个无头浏览器工具：`browser_open`、`browser_snapshot`、`browser_click`、`browser_type`、`browser_screenshot`、`browser_reset`。
+- 零外部运行时依赖（无需 Node/Python/Playwright）。Chromium 本体可选，解压到 `~/eliza/tools/` 即自动激活。
+- readonly 模式允许只读浏览器操作（open/snapshot/reset），交互操作需 autopilot。
+- 修复 chromedp context.WithTimeout 派生导致 browserCtx 被取消的问题（直接用 browserCtx 执行）。
+
 ## v0.8.0 (2026-06-25) — P1-02 through P3-03
 
 - 所有 LLM 请求统一为 SSE streaming；支持 content/reasoning/tool_calls 增量组装、取消、有限重试、截断流和 estimated usage。
