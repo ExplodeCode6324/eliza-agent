@@ -41,7 +41,7 @@ type Agent struct {
 	registry                                                            *ToolRegistry
 	messages                                                            []Message
 	worklog                                                             *WorklogBuilder
-	ui                                                                  *Renderer
+	ui                                                                  *AgentUI
 	sessionRequests, totalSteps, lastRequestSteps, lastRequestToolCalls int
 	lastRequestState                                                    LoopState
 	compressCfg                                                         CompressConfig
@@ -62,7 +62,7 @@ func NewAgent(cfg *Config, llm *LLMClient, registry *ToolRegistry) *Agent {
 	if compressCfg.TriggerPct <= 0 {
 		compressCfg = DefaultCompressConfig()
 	}
-	agent := &Agent{config: cfg, llm: llm, registry: registry, worklog: NewWorklogBuilder(cfg), ui: NewRenderer(cfg.UI), compressCfg: compressCfg, roleName: "default"}
+	agent := &Agent{config: cfg, llm: llm, registry: registry, worklog: NewWorklogBuilder(cfg), ui: NewAgentUI(cfg.UI), compressCfg: compressCfg, roleName: "default"}
 	_ = registry.SetRole("default")
 	agent.plan = loadLatestActivePlan()
 	return agent

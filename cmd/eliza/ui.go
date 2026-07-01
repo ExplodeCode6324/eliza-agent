@@ -119,6 +119,15 @@ func (r *Renderer) style(text, color string) string {
 	return color + text + ansiReset
 }
 
+func (r *Renderer) componentContext() UIComponentContext {
+	return UIComponentContext{
+		Width:   r.width,
+		Plain:   r.plain,
+		Unicode: r.unicode,
+		Style:   r.style,
+	}
+}
+
 type crlfWriter struct {
 	dst  io.Writer
 	prev byte
@@ -336,15 +345,19 @@ func (r *Renderer) Title(text string) {
 
 func (r *Renderer) Status(level, format string, args ...any) {
 	message := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("%-8s %s", strings.ToUpper(level), message)
+	lines := StatusComponent{Level: level, Message: message}.Lines(r.componentContext())
 	if strings.EqualFold(level, "FAIL") || strings.EqualFold(level, "WARN") || strings.EqualFold(level, "BLOCKED") {
 		r.writeWithInputPaused(r.err, func(w io.Writer) {
-			fmt.Fprintln(w, r.style(line, ansiDeepRed))
+			for _, line := range lines {
+				fmt.Fprintln(w, r.style(line, ansiDeepRed))
+			}
 		})
 		return
 	}
 	r.writeWithInputPaused(r.out, func(w io.Writer) {
-		fmt.Fprintln(w, r.style(line, ansiWhite))
+		for _, line := range lines {
+			fmt.Fprintln(w, r.style(line, ansiWhite))
+		}
 	})
 }
 
@@ -359,17 +372,11 @@ func (r *Renderer) RunningInputBar(mode, role string) {
 }
 
 func (r *Renderer) inputLabels(kind, mode, role, hint string) (string, string) {
-	label := fmt.Sprintf("%s  USER [%s/%s]", kind, mode, role)
+	componentKind := InputBarPrompt
 	if kind == "GUIDE" {
-		label = fmt.Sprintf("%s  RUNNING [%s/%s]", kind, mode, role)
+		componentKind = InputBarRunning
 	}
-	if hint != "" {
-		label += "  " + hint
-	}
-	if r.plain || !r.unicode {
-		return label, "> "
-	}
-	return "╭─ " + label, "╰─ "
+	return InputBarComponent{Kind: componentKind, Mode: mode, Role: role, Hint: hint}.Labels(r.componentContext())
 }
 
 func (r *Renderer) ReadPromptLine(mode, role string) (string, error) {
@@ -471,12 +478,9 @@ func (r *Renderer) EndAssistant() {
 		return
 	}
 	r.writeWithInputPaused(r.out, func(w io.Writer) {
-		r.drawBoxTop(w)
-		for _, line := range strings.Split(content, "\n") {
-			line = strings.TrimRight(line, "\r")
-			r.drawBoxLine(w, r.style("●", ansiDeepRed)+" "+r.style(line, ansiPink))
+		for _, line := range (MessageComponent{Kind: MessageAgent, Text: content}).Lines(r.componentContext()) {
+			fmt.Fprintln(w, line)
 		}
-		r.drawBoxBottom(w)
 	})
 }
 
@@ -484,32 +488,20 @@ func (r *Renderer) EndAssistant() {
 
 func (r *Renderer) UserMessage(message string) {
 	r.writeWithInputPaused(r.out, func(w io.Writer) {
-		if r.plain || !r.unicode {
-			fmt.Fprintf(w, "USER: %s\n", message)
-			return
+		for _, line := range (MessageComponent{Kind: MessageUser, Text: message}).Lines(r.componentContext()) {
+			fmt.Fprintln(w, line)
 		}
-		r.drawBoxTop(w)
-		for _, line := range strings.Split(message, "\n") {
-			line = strings.TrimRight(line, "\r")
-			r.drawBoxLine(w, r.style("●", ansiWhite)+" "+line)
-		}
-		r.drawBoxBottom(w)
-		fmt.Fprintln(w)
 	})
 }
 
 // ─── Tool output (no box) ──────────────────────────────────────────
 
 func (r *Renderer) Tool(name, status string, durationMS int64, exit string, truncated bool) {
-	line := fmt.Sprintf("TOOL     name=%s status=%s duration=%dms", name, status, durationMS)
-	if exit != "" {
-		line += " exit=" + exit
-	}
-	if truncated {
-		line += " truncated=true"
-	}
+	lines := ToolCallComponent{Name: name, Status: status, DurationMS: durationMS, Exit: exit, Truncated: truncated}.Lines(r.componentContext())
 	r.writeWithInputPaused(r.err, func(w io.Writer) {
-		fmt.Fprintln(w, r.style(line, ansiDeepRed))
+		for _, line := range lines {
+			fmt.Fprintln(w, r.style(line, ansiDeepRed))
+		}
 	})
 }
 
@@ -533,7 +525,7 @@ func (r *Renderer) ApprovalBox(prompt string, selected int) int {
 		width = 36
 	}
 	inner := width - 4
-	lines := r.approvalBoxLines(prompt, selected, inner)
+	lines := ApprovalComponent{Prompt: prompt, Selected: selected, Options: approvalOptions}.Lines(inner)
 	borderWidth := inner + 2
 	var builder strings.Builder
 	if r.plain || !r.unicode {
@@ -559,26 +551,7 @@ func (r *Renderer) ApprovalBox(prompt string, selected int) int {
 }
 
 func (r *Renderer) approvalBoxLines(prompt string, selected int, width int) []string {
-	var lines []string
-	lines = append(lines, "Approval request")
-	lines = append(lines, strings.Repeat("─", width))
-	for _, raw := range strings.Split(prompt, "\n") {
-		raw = strings.TrimRight(raw, "\r")
-		for _, wrapped := range wrapDisplay(raw, width) {
-			lines = append(lines, wrapped)
-		}
-	}
-	lines = append(lines, strings.Repeat("─", width))
-	for index, option := range approvalOptions {
-		marker := "  "
-		if index == selected {
-			marker = "> "
-		}
-		lines = append(lines, marker+option)
-	}
-	lines = append(lines, strings.Repeat("─", width))
-	lines = append(lines, "↑/↓ select, Enter confirm")
-	return lines
+	return ApprovalComponent{Prompt: prompt, Selected: selected, Options: approvalOptions}.Lines(width)
 }
 
 func (r *Renderer) approvalPlainLine(raw string, width int) string {
