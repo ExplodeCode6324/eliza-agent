@@ -14,7 +14,7 @@ CLI main.go
        ├─ ui.go / contextbar.go
        ├─ agent.go request state machine
        │    ├─ llm.go SSE-only client
-       │    ├─ tools.go Tool Policy + file/command tools
+       │    ├─ tools.go ToolRegistry + Tool interface + FilePolicy + CommandPolicy
        │    ├─ roles.go role permission input
        │    ├─ memory.go approved persistent memory
        │    ├─ skill.go controlled local extensions

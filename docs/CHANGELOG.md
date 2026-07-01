@@ -3,6 +3,7 @@
 ## v0.9.0 (2026-07-01) — 首个稳定版本
 
 - **首个稳定运行版本。** 核心架构、工具集、输入体验和安全策略已通过真实环境验证。
+- **工具注册表标准化：** 新增 ToolRegistry + Tool 接口体系（8 个接口），统一注册/授权/审批/执行管线。定义 4 种 ToolProfile 支持按场景裁剪。所有工具重构为标准接口实现。
 - 新增无头 Chromium 浏览器：基于 chromedp，7 个浏览器工具，零外部运行时依赖。readonly 模式开放只读操作。
 - 新增可选择式审批框：↑/↓ 选择 + Enter 确认替代 /approve /deny。默认拒绝，可拒绝并提供指引。
 - 新增 view_image 视觉理解工具：Gemini / OpenAI 双后端自动检测。
@@ -11,7 +12,7 @@
 - 修复 chromedp context 派生导致浏览器连接被取消。
 - 修复审批框 ↑↓ 切换重绘错位和边框断裂。
 - 修复多行粘贴逐行发送/刷屏、中文输入法提交后不即时显示。
-- 全套文档更新：README、ARCHITECTURE、CHANGELOG、三份 fix 记录和综合 FIX.md。
+- 全套文档更新：README、ARCHITECTURE、CHANGELOG、fix 记录。
 
 ## v0.8.0 (2026-07-01) — Selectable Approval Prompt
 

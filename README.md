@@ -149,10 +149,13 @@ unzip chrome-headless-shell-linux64.zip -d ~/eliza/tools/chrome-headless-shell/
 main.go ──► agent.go ──► llm.go (SSE streaming)
  CLI入口     状态机Loop    取消/重试
                 │
+          ToolRegistry (统一注册/授权/审批/执行)
+                │
    ┌────────────┼────────────┬────────────┬────────────┐
    ▼            ▼            ▼            ▼            ▼
 tools.go     skill.go    memory.go    vision.go   browser.go
-双层Policy   按需加载     审批边界     图像理解    无头浏览器
+read/write   按需加载     审批边界     图像理解    无头浏览器
+ /command
                 │
           approval.go (↑↓ 选择审批框)
 ```
@@ -337,13 +340,9 @@ Hermes Agent 的 `delegate_task` 和 Claude Code 的 subagent 模式证明，将
 - 子 Agent 沙箱化权限（如只读子 Agent、仅文件操作子 Agent）
 - 主子 Agent 间通过 worklog 传递结果
 
-### 5.2 工具接口标准化
+### 5.2 工具 Profile 按场景裁剪
 
-当前工具分散在 `tools.go` / `browser.go` / `vision.go` / `memory.go` 中，注册方式不统一。对标 Hermes 和 Codex 的工具注册模式，重构为：
-
-- 统一 Tool 接口：注册、参数校验、权限检查、结果格式化
-- 按场景选择性编译工具集合（运维版 / 代码审查版 / 浏览器增强版 / 最小只读版）
-- 工具执行日志结构化，便于审计和回放
+v0.9.0 已完成工具注册表标准化（ToolRegistry），所有工具实现统一 Tool 接口，支持注册/授权/审批/执行管线。当前定义了 4 种工具 Profile（minimal_readonly / code_review / ops / browser_enhanced），下一步实现编译期按 Profile 裁剪工具集合，产出不同场景的专用二进制。
 
 ### 5.3 结构化输出与 MCP 协议
 
