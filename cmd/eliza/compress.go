@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"strings"
 )
 
@@ -56,7 +56,7 @@ func (a *Agent) manageContext(force bool) {
 	cfg := a.compressCfg
 	if !cfg.Enabled {
 		if force {
-			fmt.Fprintln(os.Stderr, "[COMPACT] Context compaction 已禁用")
+			a.ui.PrintErr("[COMPACT] Context compaction 已禁用\n")
 		}
 		return
 	}
@@ -64,7 +64,7 @@ func (a *Agent) manageContext(force bool) {
 	used, pct := a.contextUsage()
 	if a.compactionAttempts >= cfg.MaxCount {
 		if force {
-			fmt.Fprintf(os.Stderr, "[COMPACT] 压缩机会已用完: %d/%d\n", a.compactionAttempts, cfg.MaxCount)
+			a.ui.PrintErrf("[COMPACT] 压缩机会已用完: %d/%d\n", a.compactionAttempts, cfg.MaxCount)
 		}
 		if pct >= cfg.EmergencyPct {
 			a.generateEmergencySummary(used, pct)
@@ -84,7 +84,7 @@ func (a *Agent) manageContext(force bool) {
 		if a.worklog != nil {
 			_ = a.worklog.RecordEvent("compaction.failed", "failed", "", "", map[string]any{"attempt": a.compactionAttempts, "error": err.Error()})
 		}
-		fmt.Fprintf(os.Stderr, "[COMPACT] 第 %d/%d 次压缩尝试失败: %v；保留原始消息\n",
+		a.ui.PrintErrf("[COMPACT] 第 %d/%d 次压缩尝试失败: %v；保留原始消息\n",
 			a.compactionAttempts, cfg.MaxCount, err)
 		if pct >= cfg.EmergencyPct && a.compactionAttempts >= cfg.MaxCount {
 			a.generateEmergencySummary(used, pct)
@@ -94,7 +94,7 @@ func (a *Agent) manageContext(force bool) {
 	if !compacted {
 		a.compactionAttempts--
 		if force {
-			fmt.Fprintln(os.Stderr, "[COMPACT] 没有可压缩的历史消息组")
+			a.ui.PrintErr("[COMPACT] 没有可压缩的历史消息组\n")
 		}
 		if pct >= cfg.EmergencyPct {
 			a.compactionAttempts = cfg.MaxCount
@@ -106,7 +106,7 @@ func (a *Agent) manageContext(force bool) {
 	a.compactionCount++
 	newUsed := estimateContextTokens(a.messages)
 	newPct := a.contextPercent(newUsed)
-	fmt.Fprintf(os.Stderr,
+	a.ui.PrintErrf(
 		"[COMPACT] 完成第 %d/%d 次压缩尝试（成功 %d 次）: 约 %s → %s tokens (%.1f%%)\n",
 		a.compactionAttempts,
 		cfg.MaxCount,
@@ -346,21 +346,23 @@ func (a *Agent) generateEmergencySummary(used int, pct float64) {
 	filename, err := a.saveSummaryWorklog(summary)
 	a.emergencySummaryGenerated = err == nil
 
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "════════════════ Context 警告 ════════════════")
-	fmt.Fprintf(os.Stderr,
-		"WARN     Context 已达到 %.1f%% (%s tokens)，且 %d 次压缩机会已用完。\n",
-		pct,
-		formatTokens(used),
-		a.compressCfg.MaxCount,
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "WARN     summary 工作记录生成失败: %v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "PASS     已生成会话摘要: %s\n", filename)
-	}
-	fmt.Fprintln(os.Stderr, "请及时保留关键信息，并使用 /new 开启下一个对话。")
-	fmt.Fprintln(os.Stderr, "══════════════════════════════════════════════")
+	a.ui.OutputErr(func(w io.Writer) {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "════════════════ Context 警告 ════════════════")
+		fmt.Fprintf(w,
+			"WARN     Context 已达到 %.1f%% (%s tokens)，且 %d 次压缩机会已用完。\n",
+			pct,
+			formatTokens(used),
+			a.compressCfg.MaxCount,
+		)
+		if err != nil {
+			fmt.Fprintf(w, "WARN     summary 工作记录生成失败: %v\n", err)
+		} else {
+			fmt.Fprintf(w, "PASS     已生成会话摘要: %s\n", filename)
+		}
+		fmt.Fprintln(w, "请及时保留关键信息，并使用 /new 开启下一个对话。")
+		fmt.Fprintln(w, "══════════════════════════════════════════════")
+	})
 }
 
 func (a *Agent) buildEmergencySummary() string {

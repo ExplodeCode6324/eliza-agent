@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"golang.org/x/term"
 )
 
 const (
@@ -84,10 +86,30 @@ func isTerminalFile(file *os.File) bool {
 }
 
 func terminalWidth() int {
+	if width := detectedTerminalWidth(); width >= 20 {
+		return width
+	}
+	return 80
+}
+
+func detectedTerminalWidth() int {
+	for _, file := range []*os.File{os.Stdout, os.Stderr, os.Stdin} {
+		if file == nil {
+			continue
+		}
+		fd := int(file.Fd())
+		if !term.IsTerminal(fd) {
+			continue
+		}
+		width, _, err := term.GetSize(fd)
+		if err == nil && width >= 20 {
+			return width
+		}
+	}
 	if value, err := strconv.Atoi(strings.TrimSpace(os.Getenv("COLUMNS"))); err == nil && value >= 20 {
 		return value
 	}
-	return 80
+	return 0
 }
 
 func (r *Renderer) style(text, color string) string {
@@ -97,6 +119,37 @@ func (r *Renderer) style(text, color string) string {
 	return color + text + ansiReset
 }
 
+type crlfWriter struct {
+	dst  io.Writer
+	prev byte
+}
+
+func (w *crlfWriter) Write(p []byte) (int, error) {
+	var converted []byte
+	for _, b := range p {
+		if b == '\n' && w.prev != '\r' {
+			converted = append(converted, '\r')
+		}
+		converted = append(converted, b)
+		w.prev = b
+	}
+	if len(converted) == 0 {
+		return 0, nil
+	}
+	_, err := w.dst.Write(converted)
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func rendererOutputWriter(w io.Writer) io.Writer {
+	if terminalRawActive() {
+		return &crlfWriter{dst: w}
+	}
+	return w
+}
+
 func (r *Renderer) writeWithInputPaused(w io.Writer, write func(io.Writer)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -104,10 +157,42 @@ func (r *Renderer) writeWithInputPaused(w io.Writer, write func(io.Writer)) {
 	if wasActive {
 		r.clearInputLocked()
 	}
-	write(w)
+	write(rendererOutputWriter(w))
 	if wasActive {
 		r.renderInputLocked()
 	}
+}
+
+func (r *Renderer) Output(write func(io.Writer)) {
+	r.writeWithInputPaused(r.out, write)
+}
+
+func (r *Renderer) OutputErr(write func(io.Writer)) {
+	r.writeWithInputPaused(r.err, write)
+}
+
+func (r *Renderer) Print(text string) {
+	r.Output(func(w io.Writer) {
+		fmt.Fprint(w, text)
+	})
+}
+
+func (r *Renderer) Printf(format string, args ...any) {
+	r.Output(func(w io.Writer) {
+		fmt.Fprintf(w, format, args...)
+	})
+}
+
+func (r *Renderer) PrintErr(text string) {
+	r.OutputErr(func(w io.Writer) {
+		fmt.Fprint(w, text)
+	})
+}
+
+func (r *Renderer) PrintErrf(format string, args ...any) {
+	r.OutputErr(func(w io.Writer) {
+		fmt.Fprintf(w, format, args...)
+	})
 }
 
 func (r *Renderer) startInput(header, prefix string) {
@@ -181,6 +266,7 @@ func (r *Renderer) renderInputLocked() {
 	if !r.input.active {
 		return
 	}
+	r.refreshWidthLocked()
 	lines, cursorLine, cursorCol := r.inputLines()
 	for index, line := range lines {
 		if index > 0 {
@@ -212,28 +298,37 @@ func (r *Renderer) inputLines() ([]string, int, int) {
 	return lines, len(headerLines) + cursorLine, cursorCol
 }
 
+func (r *Renderer) refreshWidthLocked() {
+	if width := detectedTerminalWidth(); width >= 20 {
+		r.width = width
+	}
+	if r.width < 20 {
+		r.width = 80
+	}
+}
+
 // ─── Left-only box (no right border — avoids alignment issues) ─────
 
-func (r *Renderer) drawBoxTop() {
+func (r *Renderer) drawBoxTop(w io.Writer) {
 	if r.plain || !r.unicode {
 		return
 	}
-	fmt.Fprintln(r.out, r.style("╭──", ansiDeepRed))
+	fmt.Fprintln(w, r.style("╭──", ansiDeepRed))
 }
 
-func (r *Renderer) drawBoxLine(content string) {
+func (r *Renderer) drawBoxLine(w io.Writer, content string) {
 	if r.plain || !r.unicode {
-		fmt.Fprintln(r.out, content)
+		fmt.Fprintln(w, content)
 		return
 	}
-	fmt.Fprintln(r.out, r.style("│ ", ansiDeepRed)+content)
+	fmt.Fprintln(w, r.style("│ ", ansiDeepRed)+content)
 }
 
-func (r *Renderer) drawBoxBottom() {
+func (r *Renderer) drawBoxBottom(w io.Writer) {
 	if r.plain || !r.unicode {
 		return
 	}
-	fmt.Fprintln(r.out, r.style("╰──", ansiDeepRed))
+	fmt.Fprintln(w, r.style("╰──", ansiDeepRed))
 }
 
 func (r *Renderer) Title(text string) {
@@ -262,7 +357,7 @@ func (r *Renderer) Prompt(mode, role string) {
 }
 
 func (r *Renderer) RunningInputBar(mode, role string) {
-	header, prefix := r.inputLabels("GUIDE", mode, role, "输入引导后按 Enter；/cancel 或 Ctrl-C 取消")
+	header, prefix := r.inputLabels("GUIDE", mode, role, "Guide, Enter; /cancel or Ctrl-C")
 	r.startInput(header, prefix)
 }
 
@@ -357,46 +452,52 @@ func (r *Renderer) SuspendInputOverlay() func() {
 // ─── Assistant box (streaming → box at end) ────────────────────────
 
 func (r *Renderer) BeginAssistant() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.streaming = true
 	r.streamBuf.Reset()
 }
 
 func (r *Renderer) AssistantChunk(chunk string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.streamBuf.WriteString(chunk)
 }
 
 func (r *Renderer) EndAssistant() {
+	r.mu.Lock()
 	r.streaming = false
 	content := strings.TrimSpace(r.streamBuf.String())
+	r.streamBuf.Reset()
+	r.mu.Unlock()
 	if content == "" {
 		return
 	}
-	r.writeWithInputPaused(r.out, func(io.Writer) {
-		r.drawBoxTop()
+	r.writeWithInputPaused(r.out, func(w io.Writer) {
+		r.drawBoxTop(w)
 		for _, line := range strings.Split(content, "\n") {
 			line = strings.TrimRight(line, "\r")
-			r.drawBoxLine(r.style("●", ansiDeepRed) + " " + r.style(line, ansiPink))
+			r.drawBoxLine(w, r.style("●", ansiDeepRed)+" "+r.style(line, ansiPink))
 		}
-		r.drawBoxBottom()
+		r.drawBoxBottom(w)
 	})
-	r.streamBuf.Reset()
 }
 
 // ─── User message box ──────────────────────────────────────────────
 
 func (r *Renderer) UserMessage(message string) {
-	r.writeWithInputPaused(r.out, func(io.Writer) {
+	r.writeWithInputPaused(r.out, func(w io.Writer) {
 		if r.plain || !r.unicode {
-			fmt.Fprintf(r.out, "USER: %s\n", message)
+			fmt.Fprintf(w, "USER: %s\n", message)
 			return
 		}
-		r.drawBoxTop()
+		r.drawBoxTop(w)
 		for _, line := range strings.Split(message, "\n") {
 			line = strings.TrimRight(line, "\r")
-			r.drawBoxLine(r.style("●", ansiWhite) + " " + line)
+			r.drawBoxLine(w, r.style("●", ansiWhite)+" "+line)
 		}
-		r.drawBoxBottom()
-		fmt.Fprintln(r.out)
+		r.drawBoxBottom(w)
+		fmt.Fprintln(w)
 	})
 }
 
@@ -416,7 +517,9 @@ func (r *Renderer) Tool(name, status string, durationMS int64, exit string, trun
 }
 
 func (r *Renderer) Confirm(prompt string) bool {
-	fmt.Fprint(r.err, r.style(prompt, ansiDeepRed))
+	r.writeWithInputPaused(r.err, func(w io.Writer) {
+		fmt.Fprint(w, r.style(prompt, ansiDeepRed))
+	})
 	input, err := readTerminalLine()
 	if err != nil && input == "" {
 		return false

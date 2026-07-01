@@ -1,9 +1,6 @@
 package main
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 type ApprovalDecision string
 
@@ -71,7 +68,7 @@ func approvalResultFromSelection(renderer *Renderer, selected int) ApprovalResul
 		return approvalGranted()
 	case 2:
 		renderer.Status("BLOCKED", "Tell ELIZA what to do instead (empty = deny only)")
-		fmt.Fprint(renderer.out, "\nUSER> ")
+		renderer.Print("\nUSER> ")
 		line, err := readTerminalLine()
 		if err != nil && line == "" {
 			return approvalDenied()

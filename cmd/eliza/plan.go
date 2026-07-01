@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -90,7 +91,7 @@ func (a *Agent) generatePlan(description string) error {
 		_ = a.worklog.RecordEvent("plan.created", "draft", "", "", map[string]any{"plan_id": id, "summary": description, "steps": len(plan.Steps)})
 	}
 	a.showPlan()
-	fmt.Fprintln(a.ui.out, "输入 /execute 确认并开始；/cancelplan 取消。")
+	a.ui.Print("输入 /execute 确认并开始；/cancelplan 取消。\n")
 	return nil
 }
 
@@ -230,17 +231,19 @@ func (a *Agent) showPlan() {
 		return
 	}
 	a.ui.Title(fmt.Sprintf("Plan %s [%s]", a.plan.ID, a.plan.Status))
-	fmt.Fprintf(a.ui.out, "任务: %s\n", a.plan.Description)
-	for _, step := range a.plan.Steps {
-		fmt.Fprintf(a.ui.out, "  %-10s %-10s attempts=%d  %s", step.ID, step.Status, step.Attempts, step.Description)
-		if step.LastResult != "" {
-			fmt.Fprintf(a.ui.out, " | %s", summarizeText(step.LastResult, 160))
+	a.ui.Output(func(w io.Writer) {
+		fmt.Fprintf(w, "任务: %s\n", a.plan.Description)
+		for _, step := range a.plan.Steps {
+			fmt.Fprintf(w, "  %-10s %-10s attempts=%d  %s", step.ID, step.Status, step.Attempts, step.Description)
+			if step.LastResult != "" {
+				fmt.Fprintf(w, " | %s", summarizeText(step.LastResult, 160))
+			}
+			fmt.Fprintln(w)
 		}
-		fmt.Fprintln(a.ui.out)
-	}
-	if a.plan.LastError != "" {
-		fmt.Fprintf(a.ui.out, "最后错误: %s\n", a.plan.LastError)
-	}
+		if a.plan.LastError != "" {
+			fmt.Fprintf(w, "最后错误: %s\n", a.plan.LastError)
+		}
+	})
 }
 
 func (a *Agent) cancelPlan() {

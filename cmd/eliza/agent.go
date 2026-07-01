@@ -152,7 +152,7 @@ func (a *Agent) RunInteractive() error {
 			a.showTools()
 			continue
 		case "/memory":
-			fmt.Fprint(a.ui.out, memoryStatus())
+			a.ui.Print(memoryStatus())
 			continue
 		case "/clear":
 			a.resetConversation(false)
@@ -194,7 +194,7 @@ func (a *Agent) RunInteractive() error {
 			a.showMode()
 			continue
 		case "/skills":
-			fmt.Fprint(a.ui.out, skillStatus())
+			a.ui.Print(skillStatus())
 			continue
 		case "/skills reload":
 			scanSkills()
@@ -716,7 +716,7 @@ func buildRunningGuidanceMessage(items []string) string {
 
 func (a *Agent) showMode() {
 	a.ui.Title("运行模式")
-	fmt.Fprintf(a.ui.out, "current: %s\nreadonly: 禁止 write_file，命令限只读白名单\nautopilot: 允许工具策略范围内的命令，危险命令逐次审批\n", a.registry.Mode())
+	a.ui.Printf("current: %s\nreadonly: 禁止 write_file，命令限只读白名单\nautopilot: 允许工具策略范围内的命令，危险命令逐次审批\n", a.registry.Mode())
 }
 func (a *Agent) switchMode(mode string) error {
 	mode = strings.ToLower(strings.TrimSpace(mode))
@@ -736,14 +736,16 @@ func (a *Agent) showTools() {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		allowed, reason := a.registry.ToolAllowedReason(name)
-		if allowed {
-			fmt.Fprintf(a.ui.out, "  %-18s ENABLED\n", name)
-		} else {
-			fmt.Fprintf(a.ui.out, "  %-18s DISABLED  %s\n", name, reason)
+	a.ui.Output(func(w io.Writer) {
+		for _, name := range names {
+			allowed, reason := a.registry.ToolAllowedReason(name)
+			if allowed {
+				fmt.Fprintf(w, "  %-18s ENABLED\n", name)
+			} else {
+				fmt.Fprintf(w, "  %-18s DISABLED  %s\n", name, reason)
+			}
 		}
-	}
+	})
 }
 func (a *Agent) showStatus() {
 	used, pct := a.contextUsage()
@@ -755,7 +757,7 @@ func (a *Agent) showStatus() {
 	if a.plan != nil {
 		planStatus = string(a.plan.Status)
 	}
-	a.ui.writeWithInputPaused(a.ui.out, func(w io.Writer) {
+	a.ui.Output(func(w io.Writer) {
 		fmt.Fprintf(w, "request_count=%d total_steps=%d messages=%d\nlast_request=%s steps=%d tool_calls=%d\ncontext=%s/%s %.1f%%%s\nmode=%s role=%s plan=%s streaming=forced\ncompaction=%d/%d success=%d\n", a.sessionRequests, a.totalSteps, len(a.messages), valueOrUnknown(string(a.lastRequestState)), a.lastRequestSteps, a.lastRequestToolCalls, formatTokens(used), formatTokens(a.config.Model.ContextWindow), pct, estimated, a.registry.Mode(), a.roleName, planStatus, a.compactionAttempts, a.compressCfg.MaxCount, a.compactionCount)
 	})
 }
@@ -765,7 +767,7 @@ func (a *Agent) showTUIHelp() {
 		planStatus = string(a.plan.Status)
 	}
 	a.ui.Title(fmt.Sprintf("TUI 交互命令 | mode=%s role=%s plan=%s streaming=forced", a.registry.Mode(), a.roleName, planStatus))
-	fmt.Fprint(a.ui.out, `会话
+	a.ui.Print(`会话
   /status              当前请求、context 与状态
   /cancel              运行中取消当前请求（也可按 Ctrl-C）
   /clear               清空对话上下文

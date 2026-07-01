@@ -75,7 +75,7 @@ func (a *Agent) showContextBar() {
 	if a.llm.LastUsageEstimated || a.llm.LastPromptTokens <= 0 {
 		estimated = " estimated"
 	}
-	a.ui.writeWithInputPaused(a.ui.out, func(w io.Writer) {
+	a.ui.Output(func(w io.Writer) {
 		fmt.Fprintf(w, "\nCONTEXT  [%s] %4.0f%%  %s / %s tokens%s | mode:%s role:%s requests:%d steps:%d messages:%d\n",
 			bar,
 			pct,

@@ -229,6 +229,49 @@ func TestStatusRedrawsActiveInputOverlay(t *testing.T) {
 	}
 }
 
+func TestRendererPrintRedrawsActiveInputOverlay(t *testing.T) {
+	var output bytes.Buffer
+	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 48}
+
+	renderer.Prompt(ModeReadonly, "default")
+	renderer.updateInput([]rune("keep typing"), len([]rune("keep typing")))
+	renderer.Print("external output\n")
+
+	text := output.String()
+	if !strings.Contains(text, "\x1b[0J") || !strings.Contains(text, "external output") || !strings.Contains(text, "keep typing") {
+		t.Fatalf("print did not clear and redraw input overlay: %q", text)
+	}
+}
+
+func TestRendererUsesCRLFWhileRawTerminalIsActive(t *testing.T) {
+	var output bytes.Buffer
+	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 80}
+	oldDepth := rawTerminalDepth
+	rawTerminalDepth = 1
+	defer func() {
+		rawTerminalDepth = oldDepth
+	}()
+
+	renderer.RunningInputBar(ModeReadonly, "default")
+	renderer.BeginAssistant()
+	renderer.AssistantChunk("存活，随时待命。\n第二行")
+	renderer.EndAssistant()
+	renderer.Print("CONTEXT line\nalready CRLF\r\n")
+
+	text := output.String()
+	if containsBareLF(text) {
+		t.Fatalf("raw-mode renderer output contains bare LF: %q", text)
+	}
+	for _, want := range []string{"╭─ GUIDE", "╭──", "│ ● 存活", "CONTEXT line\r\n", "already CRLF\r\n"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("raw-mode renderer output missing %q: %q", want, text)
+		}
+	}
+	if strings.Contains(text, "\r\r\n") {
+		t.Fatalf("raw-mode renderer double-converted CRLF: %q", text)
+	}
+}
+
 func containsBareLF(text string) bool {
 	for index := 0; index < len(text); index++ {
 		if text[index] == '\n' && (index == 0 || text[index-1] != '\r') {

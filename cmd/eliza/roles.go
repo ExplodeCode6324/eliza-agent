@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -70,26 +71,28 @@ func (a *Agent) switchRole(name string) error {
 
 func (a *Agent) listRoles() {
 	a.ui.Title("角色")
-	for _, name := range []string{"default", "coder", "ops", "writer", "security"} {
-		role := builtinRoles[name]
-		marker := " "
-		if a.roleName == name {
-			marker = "*"
-		}
-		tools := "all mode-permitted tools"
-		if role.AllowedTools != nil {
-			names := make([]string, 0, len(role.AllowedTools))
-			for tool := range role.AllowedTools {
-				names = append(names, tool)
+	a.ui.Output(func(w io.Writer) {
+		for _, name := range []string{"default", "coder", "ops", "writer", "security"} {
+			role := builtinRoles[name]
+			marker := " "
+			if a.roleName == name {
+				marker = "*"
 			}
-			sort.Strings(names)
-			tools = strings.Join(names, ",")
+			tools := "all mode-permitted tools"
+			if role.AllowedTools != nil {
+				names := make([]string, 0, len(role.AllowedTools))
+				for tool := range role.AllowedTools {
+					names = append(names, tool)
+				}
+				sort.Strings(names)
+				tools = strings.Join(names, ",")
+			}
+			fmt.Fprintf(w, "%s %-10s %-12s %s | tools=%s", marker, role.Name, role.Label, role.Description, tools)
+			if role.ForceReadonly {
+				fmt.Fprint(w, " | forced-readonly")
+			}
+			fmt.Fprintln(w)
 		}
-		fmt.Fprintf(a.ui.out, "%s %-10s %-12s %s | tools=%s", marker, role.Name, role.Label, role.Description, tools)
-		if role.ForceReadonly {
-			fmt.Fprint(a.ui.out, " | forced-readonly")
-		}
-		fmt.Fprintln(a.ui.out)
-	}
-	fmt.Fprintln(a.ui.out, "用法: /role <name>")
+		fmt.Fprintln(w, "用法: /role <name>")
+	})
 }

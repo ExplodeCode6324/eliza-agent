@@ -12,6 +12,10 @@ var (
 	rawTerminalDepth  int
 )
 
+func terminalRawActive() bool {
+	return rawTerminalDepth > 0
+}
+
 func enterRawTerminal() error {
 	if originalTermState != nil {
 		rawTerminalDepth++
