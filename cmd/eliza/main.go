@@ -179,6 +179,8 @@ func runMain(args []string) int {
 	registry.RegisterMany(
 		&ReadFileTool{policy: filePolicy},
 		&WriteFileTool{policy: filePolicy},
+		&EditFileTool{policy: filePolicy},
+		&GlobTool{policy: filePolicy},
 		&RunCommandTool{policy: commandPolicy, confirmFn: registry.confirmFn, timeout: time.Duration(cfg.Command.TimeoutSeconds) * time.Second, maxOutputBytes: cfg.Command.MaxOutputBytes},
 		&SkillListTool{},
 		&SkillViewTool{},

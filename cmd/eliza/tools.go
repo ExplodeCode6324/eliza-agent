@@ -645,6 +645,10 @@ func defaultToolSpec(name string) ToolSpec {
 		return ToolSpec{Name: name, Category: "file", Readonly: true, Approval: ToolApprovalNever, Profiles: toolProfiles(ToolProfileMinimalReadonly, ToolProfileCodeReview, ToolProfileOps, ToolProfileBrowserEnhanced)}
 	case "write_file":
 		return ToolSpec{Name: name, Category: "file", Readonly: false, Approval: ToolApprovalAlways, Profiles: toolProfiles(ToolProfileCodeReview, ToolProfileOps)}
+	case "edit_file":
+		return ToolSpec{Name: name, Category: "file", Readonly: false, Approval: ToolApprovalAlways, Profiles: toolProfiles(ToolProfileCodeReview, ToolProfileOps)}
+	case "glob":
+		return ToolSpec{Name: name, Category: "file", Readonly: true, Approval: ToolApprovalNever, Profiles: toolProfiles(ToolProfileMinimalReadonly, ToolProfileCodeReview, ToolProfileOps, ToolProfileBrowserEnhanced)}
 	case "run_command":
 		return ToolSpec{Name: name, Category: "command", Readonly: true, Approval: ToolApprovalDangerousCommand, Profiles: toolProfiles(ToolProfileCodeReview, ToolProfileOps)}
 	case "skill_list", "skill_view":
@@ -1362,6 +1366,164 @@ func (t *WriteFileTool) AuthorizeToolCall(_ ToolCallContext, args map[string]any
 	path, _ := args["path"].(string)
 	_, err := t.policy.ResolveWrite(path)
 	return err
+}
+
+// ─── edit_file ─────────────────────────────────────────────────────
+
+type EditFileTool struct {
+	policy *FilePolicy
+}
+
+func (t *EditFileTool) Definition() ToolDef {
+	return ToolDef{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "edit_file",
+			Description: "精确替换文件中的指定文本（仅替换首次出现）。参数: path (必填), old_text (必填，要替换的原文本), new_text (必填，替换后的新文本)。old_text 必须在文件中精确匹配，否则返回错误。只修改匹配到的第一处，文件其余部分保持不变。",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "要编辑的文件路径",
+					},
+					"old_text": map[string]any{
+						"type":        "string",
+						"description": "要被替换的原文本，必须与文件中内容精确匹配",
+					},
+					"new_text": map[string]any{
+						"type":        "string",
+						"description": "替换后的新文本",
+					},
+				},
+				"required": []string{"path", "old_text", "new_text"},
+			},
+		},
+	}
+}
+
+func (t *EditFileTool) Execute(args map[string]any) (string, error) {
+	path, _ := args["path"].(string)
+	oldText, _ := args["old_text"].(string)
+	newText, _ := args["new_text"].(string)
+
+	if path == "" {
+		return "", fmt.Errorf("缺少 path 参数")
+	}
+	if oldText == "" {
+		return "", fmt.Errorf("缺少 old_text 参数")
+	}
+
+	resolvedPath, err := t.policy.ResolveWrite(path)
+	if err != nil {
+		return "", err
+	}
+
+	content, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("读取文件失败: %w", err)
+	}
+
+	text := string(content)
+	count := strings.Count(text, oldText)
+	if count == 0 {
+		return "", fmt.Errorf("edit_file 未在文件中找到指定文本。请用 read_file 确认文件内容和要替换的精确文本。")
+	}
+
+	replaced := strings.Replace(text, oldText, newText, 1)
+
+	dir := filepath.Dir(resolvedPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("创建目录失败: %w", err)
+	}
+	if err := os.WriteFile(resolvedPath, []byte(replaced), 0644); err != nil {
+		return "", fmt.Errorf("写入失败: %w", err)
+	}
+
+	info, _ := os.Stat(resolvedPath)
+	sizeStr := ""
+	if info != nil {
+		sizeStr = fmt.Sprintf(" (%d 字节)", info.Size())
+	}
+
+	extra := ""
+	if count > 1 {
+		extra = fmt.Sprintf("；注意: 匹配到 %d 处，仅替换了第一处", count)
+	}
+	return fmt.Sprintf("已编辑 %s%s%s", resolvedPath, sizeStr, extra), nil
+}
+
+func (t *EditFileTool) AuthorizeToolCall(_ ToolCallContext, args map[string]any) error {
+	path, _ := args["path"].(string)
+	_, err := t.policy.ResolveWrite(path)
+	return err
+}
+
+// ─── glob ──────────────────────────────────────────────────────────
+
+type GlobTool struct {
+	policy *FilePolicy
+}
+
+func (t *GlobTool) Definition() ToolDef {
+	return ToolDef{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "glob",
+			Description: "按 glob 模式查找文件。参数: pattern (必填，如 *.go、**/*_test.go、cmd/**/*.go)。返回匹配的文件路径列表（每行一个），受 FilePolicy 约束仅返回工作区内的文件。",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pattern": map[string]any{
+						"type":        "string",
+						"description": "glob 匹配模式，支持 *, ?, [...] 通配符和 ** 递归匹配",
+					},
+				},
+				"required": []string{"pattern"},
+			},
+		},
+	}
+}
+
+func (t *GlobTool) Execute(args map[string]any) (string, error) {
+	pattern, _ := args["pattern"].(string)
+	if pattern == "" {
+		return "", fmt.Errorf("缺少 pattern 参数")
+	}
+
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", fmt.Errorf("glob 模式错误: %w", err)
+	}
+
+	var filtered []string
+	for _, match := range matches {
+		abs, err := filepath.Abs(match)
+		if err != nil {
+			continue
+		}
+		// 仅返回工作区内的文件；跳过 blocked paths
+		if !pathAllowedByRoots(abs, t.policy.workspaceRoots) {
+			continue
+		}
+		skip := false
+		for _, blocked := range t.policy.blockedPaths {
+			if pathWithinRoot(abs, blocked) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		filtered = append(filtered, abs)
+	}
+
+	if len(filtered) == 0 {
+		return "未找到匹配的文件。请检查 pattern 是否正确，或先用 run_command pwd 确认工作目录。", nil
+	}
+
+	return strings.Join(filtered, "\n"), nil
 }
 
 // ─── run_command ──────────────────────────────────────────────────

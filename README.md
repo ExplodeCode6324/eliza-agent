@@ -155,7 +155,7 @@ main.go ──► agent.go ──► llm.go (SSE streaming)
    ▼            ▼            ▼            ▼            ▼
 tools.go     skill.go    memory.go    vision.go   browser.go
 read/write   按需加载     审批边界     图像理解    无头浏览器
- /command
+ /edit/glob
                 │
           approval.go (↑↓ 选择审批框)
 ```
@@ -231,6 +231,8 @@ ELIZA_Agent/
 |------|------|:--------:|:---------:|
 | `read_file` | 分段读取文件，受 FilePolicy 约束 | ✅ | ✅ |
 | `write_file` | 写入文件 | ❌ | ✅ 审批 |
+| `edit_file` | 精确替换文件中指定文本（仅首处） | ❌ | ✅ 审批 |
+| `glob` | 按 glob 模式查找文件 | ✅ | ✅ |
 | `run_command` | 执行 Shell 命令，受 CommandPolicy 约束 | ✅ 只读 | ✅ 审批 |
 | `skill_list` | 列出可用技能 | ✅ | ✅ |
 | `skill_view` | 按需加载技能内容 | ✅ | ✅ |

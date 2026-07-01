@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -138,4 +140,148 @@ func (t *auditContextTool) Execute(map[string]any) (string, error) {
 func (t *auditContextTool) SetAuditContext(requestID, toolCallID string) {
 	t.requestID = requestID
 	t.toolCallID = toolCallID
+}
+
+func TestEditFileReplacesExactMatchAndRejectsMissing(t *testing.T) {
+	policy := newTestFilePolicy(t)
+	registry := NewToolRegistry(nil)
+	registry.Register(&EditFileTool{policy: policy})
+
+	// 创建测试文件
+	src := filepath.Join(policy.baseDir, "src.go")
+	original := "package main\n\nfunc main() {\n	println(\"hello\")\n}\n"
+	if err := os.WriteFile(src, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 精确替换
+	output, err := registry.ExecuteContext(context.Background(), "req_1", ToolCall{Func: ToolCallFunc{Name: "edit_file"}}, map[string]any{
+		"path":     "src.go",
+		"old_text": "println(\"hello\")",
+		"new_text": "fmt.Println(\"hello world\")",
+	})
+	if err != nil {
+		t.Fatalf("edit_file should succeed: %v", err)
+	}
+	if !strings.Contains(output, "已编辑") {
+		t.Fatalf("unexpected output: %s", output)
+	}
+
+	// 验证内容
+	content, _ := os.ReadFile(src)
+	if !strings.Contains(string(content), "fmt.Println") {
+		t.Fatal("file was not edited correctly")
+	}
+	if strings.Contains(string(content), "println(") {
+		t.Fatal("old text should be gone after edit")
+	}
+
+	// 不存在的文本应报错
+	_, err = registry.ExecuteContext(context.Background(), "req_2", ToolCall{Func: ToolCallFunc{Name: "edit_file"}}, map[string]any{
+		"path":     "src.go",
+		"old_text": "this text does not exist",
+		"new_text": "anything",
+	})
+	if err == nil || !strings.Contains(err.Error(), "未在文件中找到") {
+		t.Fatalf("missing old_text should return error, got: %v", err)
+	}
+}
+
+func TestGlobFindsFilesAndFiltersByPolicy(t *testing.T) {
+	policy := newTestFilePolicy(t)
+	registry := NewToolRegistry(nil)
+	registry.Register(&GlobTool{policy: policy})
+
+	// 创建一些 .go 文件
+	for _, name := range []string{"a.go", "b.go", "c_test.go", "readme.md"} {
+		if err := os.WriteFile(filepath.Join(policy.baseDir, name), []byte("test"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// glob 匹配 *.go
+	output, err := registry.ExecuteContext(context.Background(), "req_1", ToolCall{Func: ToolCallFunc{Name: "glob"}}, map[string]any{
+		"pattern": filepath.Join(policy.baseDir, "*.go"),
+	})
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if !strings.Contains(output, "a.go") || !strings.Contains(output, "b.go") || !strings.Contains(output, "c_test.go") {
+		t.Fatalf("glob *.go should find all .go files, got: %s", output)
+	}
+	if strings.Contains(output, "readme.md") {
+		t.Fatal("glob *.go should not match .md files")
+	}
+
+	// glob 匹配 *_test.go
+	output2, err := registry.ExecuteContext(context.Background(), "req_2", ToolCall{Func: ToolCallFunc{Name: "glob"}}, map[string]any{
+		"pattern": filepath.Join(policy.baseDir, "*_test.go"),
+	})
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if !strings.Contains(output2, "c_test.go") {
+		t.Fatalf("glob *_test.go should find test file, got: %s", output2)
+	}
+	if strings.Contains(output2, "a.go") || strings.Contains(output2, "b.go") {
+		t.Fatal("glob *_test.go should not find regular .go files")
+	}
+
+	// glob 无匹配时的响应
+	output3, err := registry.ExecuteContext(context.Background(), "req_3", ToolCall{Func: ToolCallFunc{Name: "glob"}}, map[string]any{
+		"pattern": filepath.Join(policy.baseDir, "*.xyz"),
+	})
+	if err != nil {
+		t.Fatalf("empty glob should not error: %v", err)
+	}
+	if !strings.Contains(output3, "未找到匹配的文件") {
+		t.Fatalf("empty glob should return info message, got: %s", output3)
+	}
+}
+
+func TestEditFileAndGlobAuthorizeByPolicy(t *testing.T) {
+	policy := newTestFilePolicy(t)
+	cmdPolicy, err := NewCommandPolicy(ModeReadonly, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := &EditFileTool{policy: policy}
+	g := &GlobTool{policy: policy}
+
+	// edit_file 应被 readonly 阻止
+	readonlyRegistry := NewToolRegistry(cmdPolicy)
+	readonlyRegistry.RegisterMany(edit, g)
+	if readonlyRegistry.ToolAllowed("edit_file") {
+		t.Fatal("edit_file should be blocked in readonly mode")
+	}
+	if !readonlyRegistry.ToolAllowed("glob") {
+		t.Fatal("glob should be allowed in readonly mode")
+	}
+
+	// edit_file 应触发审批
+	autopilotRegistry := NewToolRegistry(cmdPolicy)
+	autopilotRegistry.RegisterMany(edit, g)
+	if err := autopilotRegistry.SetMode(ModeAutopilot); err != nil {
+		t.Fatal(err)
+	}
+	if !autopilotRegistry.RequiresApproval("edit_file", map[string]any{"path": "x", "old_text": "a", "new_text": "b"}) {
+		t.Fatal("edit_file should require approval")
+	}
+	if autopilotRegistry.RequiresApproval("glob", map[string]any{"pattern": "*.go"}) {
+		t.Fatal("glob should not require approval")
+	}
+
+	// glob 拒绝 blocked path 内的文件
+	blockedPath := filepath.Join(policy.baseDir, "blocked", "secret.txt")
+	os.MkdirAll(filepath.Dir(blockedPath), 0755)
+	os.WriteFile(blockedPath, []byte("secret"), 0644)
+	output, err := readonlyRegistry.ExecuteContext(context.Background(), "req_1", ToolCall{Func: ToolCallFunc{Name: "glob"}}, map[string]any{
+		"pattern": filepath.Join(policy.baseDir, "blocked", "*.txt"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "未找到") {
+		t.Fatalf("glob should filter blocked paths, got: %s", output)
+	}
 }
