@@ -287,11 +287,8 @@ func (r *Renderer) renderInputLocked() {
 }
 
 func (r *Renderer) inputLines() ([]string, int, int) {
-	width := r.width
-	if width < 20 {
-		width = 80
-	}
-	headerLines := wrapDisplay(r.input.header, width)
+	width := normalizedTerminalWidth(r.width)
+	headerLines := wrapDisplay(r.input.header, redrawSafeWidth(width))
 	lines := append([]string(nil), headerLines...)
 	inputLines, cursorLine, cursorCol := renderInputBufferLines(r.input.prefix, r.input.buf, r.input.pos, width)
 	lines = append(lines, inputLines...)
@@ -528,10 +525,7 @@ func (r *Renderer) Confirm(prompt string) bool {
 }
 
 func (r *Renderer) ApprovalBox(prompt string, selected int) int {
-	width := r.width
-	if width <= 0 {
-		width = 80
-	}
+	width := redrawSafeWidth(normalizedTerminalWidth(r.width))
 	if width > 96 {
 		width = 96
 	}
@@ -926,6 +920,7 @@ func renderInputBufferLines(prefix string, buf []rune, pos int, width int) ([]st
 	if width < 1 {
 		width = 80
 	}
+	width = redrawSafeWidth(width)
 	if pos < 0 {
 		pos = 0
 	}
@@ -982,6 +977,20 @@ func renderInputBufferLines(prefix string, buf []rune, pos int, width int) ([]st
 	}
 	lines = append(lines, line)
 	return lines, cursorLine, cursorCol
+}
+
+func normalizedTerminalWidth(width int) int {
+	if width < 20 {
+		return 80
+	}
+	return width
+}
+
+func redrawSafeWidth(width int) int {
+	if width > 1 {
+		return width - 1
+	}
+	return width
 }
 
 // Braille cells preserve an 80x80 dot sampling of docs/logo.png in only 40x20

@@ -235,6 +235,21 @@ func TestInputCursorTracksChineseFullwidthPunctuation(t *testing.T) {
 	}
 }
 
+func TestInputLinesAvoidRightEdgeAutowrap(t *testing.T) {
+	width := 18
+	input := []rune("abcdefghijklmnopqrstuvw")
+	lines, _, cursorCol := renderInputBufferLines("╰─ ", input, len(input), width)
+
+	if cursorCol >= width {
+		t.Fatalf("cursor should stay before the terminal right edge: col=%d width=%d lines=%#v", cursorCol, width, lines)
+	}
+	for _, line := range lines {
+		if displayWidth(line) >= width {
+			t.Fatalf("input line should not reach terminal right edge: width=%d lineWidth=%d line=%q", width, displayWidth(line), line)
+		}
+	}
+}
+
 func TestStatusRedrawsActiveInputOverlay(t *testing.T) {
 	var output bytes.Buffer
 	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 48}
