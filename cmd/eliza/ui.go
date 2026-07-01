@@ -121,7 +121,25 @@ func (r *Renderer) Status(level, format string, args ...any) {
 }
 
 func (r *Renderer) Prompt(mode, role string) {
-	fmt.Fprintf(r.out, "\n%s ", r.style(fmt.Sprintf("USER [%s/%s]>", mode, role), ansiWhite))
+	if r.plain || !r.unicode {
+		fmt.Fprintf(r.out, "\nINPUT    USER [%s/%s]\n> ", mode, role)
+		return
+	}
+	label := fmt.Sprintf("INPUT  USER [%s/%s]  /help  /status", mode, role)
+	fmt.Fprintln(r.out, r.style("╭─ "+label, ansiSoftRed))
+	fmt.Fprint(r.out, r.style("╰─ ", ansiSoftRed))
+}
+
+func (r *Renderer) RunningInputBar(mode, role string) {
+	if r.plain || !r.unicode {
+		fmt.Fprintf(r.err, "\nGUIDE    RUNNING [%s/%s]  输入引导后按 Enter；/cancel 或 Ctrl-C 取消\n", mode, role)
+		return
+	}
+	label := fmt.Sprintf("GUIDE  RUNNING [%s/%s]  输入引导后按 Enter；/cancel 或 Ctrl-C 取消", mode, role)
+	for _, line := range wrapDisplay(label, r.width-3) {
+		fmt.Fprintln(r.err, r.style("╭─ "+line, ansiSoftRed))
+	}
+	fmt.Fprintln(r.err, r.style("╰─", ansiSoftRed))
 }
 
 // ─── Assistant box (streaming → box at end) ────────────────────────

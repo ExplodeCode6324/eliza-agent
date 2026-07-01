@@ -27,6 +27,7 @@ type BrowserRuntime struct {
 	execPath     string
 	timeout      time.Duration
 	maxTextBytes int
+	runActions   func(context.Context, ...chromedp.Action) error
 
 	mu              sync.Mutex
 	allocatorCtx    context.Context
@@ -80,15 +81,47 @@ func (b *BrowserRuntime) run(parent context.Context, actions ...chromedp.Action)
 	if err := b.ensureLocked(); err != nil {
 		return err
 	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	timeout := b.timeout
+	if timeout <= 0 {
+		timeout = time.Duration(defaultBrowserTimeoutSeconds) * time.Second
+	}
 
-	// 直接使用 browserCtx，不使用 context.WithTimeout 派生。
-	// 派生 context 的 cancel 会触发 chromedp 内部关闭浏览器连接，
-	// 导致后续操作失败（"context canceled"）。
-	err := chromedp.Run(b.browserCtx, actions...)
+	opCtx, cancel := context.WithTimeout(b.browserCtx, timeout)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-parent.Done():
+			cancel()
+		case <-done:
+		}
+	}()
+	defer func() {
+		close(done)
+		cancel()
+	}()
+
+	err := b.runChromedp(opCtx, actions...)
+	if opCtx.Err() != nil {
+		b.resetLocked()
+		if parent.Err() != nil {
+			return parent.Err()
+		}
+		return opCtx.Err()
+	}
 	if err != nil && b.browserCtx.Err() != nil {
 		b.resetLocked()
 	}
 	return err
+}
+
+func (b *BrowserRuntime) runChromedp(ctx context.Context, actions ...chromedp.Action) error {
+	if b.runActions != nil {
+		return b.runActions(ctx, actions...)
+	}
+	return chromedp.Run(ctx, actions...)
 }
 
 func (b *BrowserRuntime) ensureLocked() error {
@@ -111,8 +144,9 @@ func (b *BrowserRuntime) ensureLocked() error {
 	b.allocatorCtx, b.allocatorCancel = chromedp.NewExecAllocator(context.Background(), opts...)
 	b.browserCtx, b.browserCancel = chromedp.NewContext(b.allocatorCtx)
 
-	// 直接用 browserCtx 做初始化导航，避免派生 context cancel 关闭浏览器
-	if err := chromedp.Run(b.browserCtx, chromedp.Navigate("about:blank")); err != nil {
+	// The first chromedp Run allocates the browser, so avoid a timeout-derived
+	// child context here. Operation timeouts are applied only after startup.
+	if err := b.runChromedp(b.browserCtx, chromedp.Navigate("about:blank")); err != nil {
 		b.resetLocked()
 		return fmt.Errorf("启动无头浏览器失败: %w", err)
 	}

@@ -63,10 +63,10 @@ err := chromedp.Run(b.browserCtx, actions...)
 
 ## 权衡
 
-移除 `context.WithTimeout` 意味着单个 chromedp 操作不再有 Go 层的超时保护。
-但 Chrome 本身有网络超时（默认 30s），且 chromedp 操作通常是秒级完成的
-页面加载，不会无限阻塞。如需严格的超时控制，可用 goroutine + channel 替代
-context 超时。
+启动期仍直接使用 `browserCtx`，避免首次 `chromedp.Run` 的派生 context
+取消时关闭浏览器进程。浏览器启动完成后，单个操作会使用派生 context
+承接 `timeout_seconds` 和用户取消；一旦超时或请求被取消，执行层会重置
+浏览器会话，让下一次工具调用从干净状态重新启动。
 
 ## 验证
 

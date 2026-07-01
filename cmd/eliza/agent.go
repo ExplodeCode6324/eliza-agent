@@ -53,6 +53,8 @@ type Agent struct {
 	requestMu                                                           sync.Mutex
 	currentCtx                                                          context.Context
 	currentCancel                                                       context.CancelFunc
+	runningInputBuffer                                                  string
+	pendingGuidance                                                     []string
 }
 
 func NewAgent(cfg *Config, llm *LLMClient, registry *ToolRegistry) *Agent {
@@ -143,6 +145,9 @@ func (a *Agent) RunInteractive() error {
 			continue
 		case "/status":
 			a.showStatus()
+			continue
+		case "/cancel":
+			a.ui.Status("WARN", "没有正在运行的请求；运行中可输入 /cancel 或按 Ctrl-C 取消")
 			continue
 		case "/tools":
 			a.showTools()
@@ -242,6 +247,7 @@ func (a *Agent) RunInteractive() error {
 			continue
 		}
 		a.prepareMessages(input)
+		a.ui.RunningInputBar(a.registry.Mode(), a.roleName)
 		if err := a.processLoop(false); err != nil {
 			a.ui.Status("FAIL", "当前请求失败: %v", err)
 		}
@@ -250,6 +256,8 @@ func (a *Agent) RunInteractive() error {
 
 func (a *Agent) processLoop(singleShot bool) error {
 	runtimeState := &RequestRuntime{ID: "req_" + randomID(), State: LoopPreparing, StartedAt: time.Now()}
+	a.runningInputBuffer = ""
+	a.pendingGuidance = nil
 	a.sessionRequests++
 	for index := len(a.messages) - 1; index >= 0; index-- {
 		if a.messages[index].Role == "user" {
@@ -274,9 +282,18 @@ func (a *Agent) processLoop(singleShot bool) error {
 	}
 	var pending Message
 	for {
+		if runtimeState.State != LoopCompleted && runtimeState.State != LoopFailed && runtimeState.State != LoopCancelled {
+			if a.collectRunningInput(runtimeState.ID) {
+				runtimeState.LastError = context.Canceled
+				runtimeState.State = LoopCancelled
+			}
+		}
 		if ctx.Err() != nil && runtimeState.State != LoopFailed && runtimeState.State != LoopCompleted {
 			runtimeState.LastError = ctx.Err()
 			runtimeState.State = LoopCancelled
+		}
+		if runtimeState.State == LoopCallingLLM {
+			a.injectPendingGuidance(runtimeState.ID)
 		}
 		switch runtimeState.State {
 		case LoopPreparing:
@@ -298,13 +315,20 @@ func (a *Agent) processLoop(singleShot bool) error {
 					streamPrinted = true
 				}
 				a.ui.AssistantChunk(chunk)
+				a.collectRunningInput(runtimeState.ID)
 			}, OnRetry: func(attempt int, delay time.Duration, reason string) {
 				a.ui.Status("WARN", "LLM 建连重试 %d，等待 %s: %s", attempt, delay.Round(time.Millisecond), reason)
 				_ = a.worklog.RecordEvent("llm.retry", "retrying", runtimeState.ID, "", map[string]any{"attempt": attempt, "delay_ms": delay.Milliseconds(), "reason": reason})
+				a.collectRunningInput(runtimeState.ID)
 			}}
 			response, err := a.llm.ChatContext(ctx, a.messages, a.registry.Definitions(), callbacks)
 			if streamPrinted {
 				a.ui.EndAssistant()
+			}
+			if a.collectRunningInput(runtimeState.ID) {
+				runtimeState.LastError = context.Canceled
+				runtimeState.State = LoopCancelled
+				continue
 			}
 			if err != nil {
 				payload := map[string]any{"error": err.Error(), "step": runtimeState.Steps}
@@ -359,6 +383,10 @@ func (a *Agent) processLoop(singleShot bool) error {
 			// Streaming callbacks normally already rendered the exact same completed message.
 			a.messages = append(a.messages, pending)
 			a.worklog.RecordConversation("assistant", pending.Content, runtimeState.ID, "completed")
+			if a.injectPendingGuidance(runtimeState.ID) {
+				runtimeState.State = LoopCallingLLM
+				continue
+			}
 			runtimeState.State = LoopCompleted
 		case LoopCompleted:
 			runtimeState.EndedAt = time.Now()
@@ -419,6 +447,9 @@ func validateChatResponse(response *chatResponse) (Message, error) {
 
 func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []ToolCall) error {
 	for _, call := range calls {
+		if a.collectRunningInput(requestID) {
+			return context.Canceled
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -510,6 +541,9 @@ func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []
 		a.worklog.RecordTool(requestID, call, args, loggedOutput, err, elapsed, status)
 		a.appendToolResult(call.ID, output)
 		a.ui.Tool(call.Func.Name, strings.ToUpper(status), elapsed.Milliseconds(), extractExit(output), strings.Contains(output, "TRUNCATED"))
+		if a.collectRunningInput(requestID) {
+			return context.Canceled
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -608,6 +642,97 @@ func extractExit(output string) string {
 	return ""
 }
 
+func (a *Agent) collectRunningInput(requestID string) bool {
+	if !a.interactive {
+		return false
+	}
+	terminalMu.Lock()
+	chunk, err := readPendingTerminalInput()
+	terminalMu.Unlock()
+	if err != nil {
+		a.ui.Status("WARN", "运行中输入读取失败: %v", err)
+		return false
+	}
+	if chunk == "" && a.runningInputBuffer == "" {
+		return false
+	}
+	var lines []string
+	a.runningInputBuffer, lines = splitPendingInputLines(a.runningInputBuffer, chunk)
+	cancelRequested := false
+	for _, line := range lines {
+		input := strings.TrimSpace(line)
+		if input == "" {
+			continue
+		}
+		lower := strings.ToLower(input)
+		_ = a.worklog.RecordEvent("tui.running_input", "completed", requestID, "", map[string]any{"input": input})
+		switch lower {
+		case "/cancel", "/stop", "/interrupt":
+			a.ui.Status("WARN", "当前请求取消中")
+			a.CancelCurrent()
+			cancelRequested = true
+		case "/status":
+			a.showStatus()
+		case "/help":
+			a.ui.Status("RUNNING", "运行中可输入新的引导并按 Enter；/cancel 或 Ctrl-C 取消")
+		default:
+			if strings.HasPrefix(input, "/") {
+				a.ui.Status("WARN", "运行中只支持 /cancel、/status 和普通引导；已忽略 %s", input)
+				continue
+			}
+			a.pendingGuidance = append(a.pendingGuidance, input)
+			a.ui.Status("RUNNING", "已暂存运行中引导: %s", truncateDisplay(input, 96))
+		}
+	}
+	return cancelRequested
+}
+
+func splitPendingInputLines(buffer, chunk string) (string, []string) {
+	if chunk == "" && buffer == "" {
+		return "", nil
+	}
+	combined := buffer + chunk
+	combined = strings.ReplaceAll(combined, "\r\n", "\n")
+	combined = strings.ReplaceAll(combined, "\r", "\n")
+	parts := strings.Split(combined, "\n")
+	if strings.HasSuffix(combined, "\n") {
+		return "", parts[:len(parts)-1]
+	}
+	if len(parts) == 1 {
+		return parts[0], nil
+	}
+	return parts[len(parts)-1], parts[:len(parts)-1]
+}
+
+func (a *Agent) injectPendingGuidance(requestID string) bool {
+	if len(a.pendingGuidance) == 0 {
+		return false
+	}
+	items := append([]string(nil), a.pendingGuidance...)
+	a.pendingGuidance = nil
+	message := buildRunningGuidanceMessage(items)
+	a.messages = append(a.messages, Message{Role: "user", Content: message})
+	a.worklog.RecordConversation("user", message, requestID, "completed")
+	_ = a.worklog.RecordEvent("request.guidance_injected", "completed", requestID, "", map[string]any{"count": len(items)})
+	a.ui.Status("RUNNING", "已把 %d 条运行中引导交给 ELIZA", len(items))
+	return true
+}
+
+func buildRunningGuidanceMessage(items []string) string {
+	var builder strings.Builder
+	builder.WriteString("用户在任务运行过程中追加了以下引导。请优先遵循这些新要求，调整当前任务的下一步；不要重复已经被用户取消、否定或修正的动作。\n")
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		builder.WriteString("- ")
+		builder.WriteString(item)
+		builder.WriteByte('\n')
+	}
+	return strings.TrimRight(builder.String(), "\n")
+}
+
 func (a *Agent) showMode() {
 	a.ui.Title("运行模式")
 	fmt.Fprintf(a.ui.out, "current: %s\nreadonly: 禁止 write_file，命令限只读白名单\nautopilot: 允许工具策略范围内的命令，危险命令逐次审批\n", a.registry.Mode())
@@ -659,6 +784,7 @@ func (a *Agent) showTUIHelp() {
 	a.ui.Title(fmt.Sprintf("TUI 交互命令 | mode=%s role=%s plan=%s streaming=forced", a.registry.Mode(), a.roleName, planStatus))
 	fmt.Fprint(a.ui.out, `会话
   /status              当前请求、context 与状态
+  /cancel              运行中取消当前请求（也可按 Ctrl-C）
   /clear               清空对话上下文
   /new                 结束当前 Worklog 并创建新会话
   /compress            手动触发 context compaction
@@ -681,7 +807,7 @@ func (a *Agent) recordTUICommand(command string) {
 	_ = a.worklog.RecordEvent("tui.command", "completed", "", "", map[string]any{"command": command})
 }
 func nearestCommand(input string) string {
-	commands := []string{"/help", "/status", "/clear", "/new", "/mode", "/role", "/plan", "/showplan", "/execute", "/cancelplan", "/compress", "/tools", "/skills", "/memory"}
+	commands := []string{"/help", "/status", "/cancel", "/clear", "/new", "/mode", "/role", "/plan", "/showplan", "/execute", "/cancelplan", "/compress", "/tools", "/skills", "/memory"}
 	best := ""
 	distance := 999
 	for _, command := range commands {

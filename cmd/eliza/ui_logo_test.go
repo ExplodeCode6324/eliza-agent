@@ -182,6 +182,21 @@ func TestApprovalBoxUsesCRLFLineEndingsForRawMode(t *testing.T) {
 	}
 }
 
+func TestPromptAndRunningInputBarAreVisible(t *testing.T) {
+	var output bytes.Buffer
+	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 72}
+
+	renderer.Prompt(ModeReadonly, "default")
+	renderer.RunningInputBar(ModeReadonly, "default")
+	text := output.String()
+
+	for _, want := range []string{"╭─ INPUT", "USER [readonly/default]", "╭─ GUIDE", "RUNNING [readonly/default]", "/cancel"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("input bar missing %q: %q", want, text)
+		}
+	}
+}
+
 func containsBareLF(text string) bool {
 	for index := 0; index < len(text); index++ {
 		if text[index] == '\n' && (index == 0 || text[index-1] != '\r') {

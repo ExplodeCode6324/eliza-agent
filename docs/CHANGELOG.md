@@ -5,13 +5,16 @@
 - 新增可选择式审批框：↑/↓ 切换选项，Enter 确认。默认拒绝，批准只对本次操作生效。
 - 拒绝时可补充新的执行要求，让 ELIZA 调整后续方案。
 - 审批框重绘稳定化：`\r` 光标复位 + strings.Builder 原子输出，消除箭头切换时的视觉残留。
+- 交互运行中可继续输入引导，ELIZA 会在 LLM/tool 安全点注入下一轮；`/cancel` 或 Ctrl-C 可取消当前请求。
+- 加强底部输入栏：idle 与 running 状态分别显示明显的 INPUT/GUIDE 提示。
+- 浏览器工具恢复操作级 timeout/cancel 兜底，超时或取消后重置无头浏览器会话，避免失败后卡死。
 
 ## v0.8.0 (2026-06-30) — Headless Chromium Browser
 
 - 基于 Go chromedp 内置 7 个无头浏览器工具：`browser_open`、`browser_snapshot`、`browser_click`、`browser_type`、`browser_screenshot`、`browser_reset`。
 - 零外部运行时依赖（无需 Node/Python/Playwright）。Chromium 本体可选，解压到 `~/eliza/tools/` 即自动激活。
 - readonly 模式允许只读浏览器操作（open/snapshot/reset），交互操作需 autopilot。
-- 修复 chromedp context.WithTimeout 派生导致 browserCtx 被取消的问题（直接用 browserCtx 执行）。
+- 修复 chromedp context.WithTimeout 派生导致启动期 browserCtx 被取消的问题；浏览器操作期保留超时和用户取消兜底，超时后重置会话。
 
 ## v0.8.0 (2026-06-25) — P1-02 through P3-03
 
