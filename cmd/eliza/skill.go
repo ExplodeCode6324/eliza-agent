@@ -237,6 +237,19 @@ func (t *SkillViewTool) Definition() ToolDef {
 		}, "required": []string{"name"}},
 	}}
 }
+
+func (t *SkillViewTool) ValidateArgs(args map[string]any) error {
+	name, _ := args["name"].(string)
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("missing name")
+	}
+	resource, _ := args["resource"].(string)
+	if filepath.IsAbs(resource) {
+		return fmt.Errorf("absolute resource paths are forbidden")
+	}
+	return nil
+}
+
 func (t *SkillViewTool) Execute(args map[string]any) (string, error) {
 	name, _ := args["name"].(string)
 	resource, _ := args["resource"].(string)

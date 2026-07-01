@@ -286,6 +286,14 @@ func (t *BrowserOpenTool) Definition() ToolDef {
 	}
 }
 
+func (t *BrowserOpenTool) ValidateArgs(args map[string]any) error {
+	if _, err := normalizeBrowserURL(valueString(args["url"])); err != nil {
+		return err
+	}
+	_, err := browserWaitArg(args)
+	return err
+}
+
 func (t *BrowserOpenTool) Execute(args map[string]any) (string, error) {
 	return t.ExecuteContext(context.Background(), args)
 }
@@ -337,6 +345,17 @@ func (t *BrowserSnapshotTool) Definition() ToolDef {
 			},
 		},
 	}
+}
+
+func (t *BrowserSnapshotTool) ValidateArgs(args map[string]any) error {
+	maxChars, err := integerToolArg(args, "max_chars", 1)
+	if err != nil {
+		return err
+	}
+	if maxChars <= 0 {
+		return fmt.Errorf("max_chars 必须大于 0")
+	}
+	return nil
 }
 
 func (t *BrowserSnapshotTool) Execute(args map[string]any) (string, error) {
@@ -400,6 +419,17 @@ func (t *BrowserClickTool) Definition() ToolDef {
 			},
 		},
 	}
+}
+
+func (t *BrowserClickTool) ValidateArgs(args map[string]any) error {
+	if _, err := browserSelectorArg(args); err != nil {
+		return err
+	}
+	if _, err := browserWaitArg(args); err != nil {
+		return err
+	}
+	_, err := browserQueryOptions(args)
+	return err
 }
 
 func (t *BrowserClickTool) Execute(args map[string]any) (string, error) {
@@ -470,6 +500,21 @@ func (t *BrowserTypeTool) Definition() ToolDef {
 	}
 }
 
+func (t *BrowserTypeTool) ValidateArgs(args map[string]any) error {
+	if _, err := browserSelectorArg(args); err != nil {
+		return err
+	}
+	text, _ := args["text"].(string)
+	if text == "" {
+		return fmt.Errorf("缺少 text 参数")
+	}
+	if _, err := browserWaitArg(args); err != nil {
+		return err
+	}
+	_, err := browserQueryOptions(args)
+	return err
+}
+
 func (t *BrowserTypeTool) Execute(args map[string]any) (string, error) {
 	return t.ExecuteContext(context.Background(), args)
 }
@@ -537,6 +582,17 @@ func (t *BrowserScreenshotTool) Definition() ToolDef {
 	}
 }
 
+func (t *BrowserScreenshotTool) ValidateArgs(args map[string]any) error {
+	_, ok := args["full_page"]
+	if !ok {
+		return nil
+	}
+	if _, ok := args["full_page"].(bool); !ok {
+		return fmt.Errorf("full_page 必须是布尔值")
+	}
+	return nil
+}
+
 func (t *BrowserScreenshotTool) Execute(args map[string]any) (string, error) {
 	return t.ExecuteContext(context.Background(), args)
 }
@@ -544,7 +600,7 @@ func (t *BrowserScreenshotTool) Execute(args map[string]any) (string, error) {
 func (t *BrowserScreenshotTool) ExecuteContext(ctx context.Context, args map[string]any) (string, error) {
 	path, _ := args["path"].(string)
 	if strings.TrimSpace(path) == "" {
-		path = filepath.Join("browser", "screenshots", "screenshot_"+time.Now().Format("20060102_150405")+".png")
+		path = defaultBrowserScreenshotPath()
 	}
 	resolved, err := t.policy.ResolveWrite(path)
 	if err != nil {
@@ -572,6 +628,19 @@ func (t *BrowserScreenshotTool) ExecuteContext(ctx context.Context, args map[str
 		return "", fmt.Errorf("写入截图失败: %w", err)
 	}
 	return fmt.Sprintf("screenshot=%s bytes=%d", resolved, len(image)), nil
+}
+
+func (t *BrowserScreenshotTool) AuthorizeToolCall(_ ToolCallContext, args map[string]any) error {
+	path, _ := args["path"].(string)
+	if strings.TrimSpace(path) == "" {
+		path = defaultBrowserScreenshotPath()
+	}
+	_, err := t.policy.ResolveWrite(path)
+	return err
+}
+
+func defaultBrowserScreenshotPath() string {
+	return filepath.Join("browser", "screenshots", "screenshot_"+time.Now().Format("20060102_150405")+".png")
 }
 
 type BrowserResetTool struct {
@@ -602,12 +671,14 @@ func registerBrowserTools(registry *ToolRegistry, cfg BrowserPluginConfig, fileP
 	if !ok {
 		return false
 	}
-	registry.Register(&BrowserOpenTool{browser: browser})
-	registry.Register(&BrowserSnapshotTool{browser: browser})
-	registry.Register(&BrowserClickTool{browser: browser})
-	registry.Register(&BrowserTypeTool{browser: browser})
-	registry.Register(&BrowserScreenshotTool{browser: browser, policy: filePolicy})
-	registry.Register(&BrowserResetTool{browser: browser})
+	registry.RegisterMany(
+		&BrowserOpenTool{browser: browser},
+		&BrowserSnapshotTool{browser: browser},
+		&BrowserClickTool{browser: browser},
+		&BrowserTypeTool{browser: browser},
+		&BrowserScreenshotTool{browser: browser, policy: filePolicy},
+		&BrowserResetTool{browser: browser},
+	)
 	return true
 }
 

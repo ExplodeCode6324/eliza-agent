@@ -233,14 +233,17 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 		}
 		updated += "\n" + strings.TrimSpace(content) + "\n"
 		request := fmt.Sprintf("MEMORY change request\nTarget: %s\nAction: append\nExact content to add:\n---\n%s\n---", filename, strings.TrimSpace(content))
-		if t.approvalFn == nil {
-			t.recordDecision("rejected", filename, action, approvalDenied())
-			return cancelledMemoryMessage(approvalDenied()), nil
-		}
-		approval := t.approvalFn(request)
-		if !approval.Approved() {
-			t.recordDecision(approval.Status(), filename, action, approval)
-			return cancelledMemoryMessage(approval), nil
+		approval := approvalGranted()
+		if approvedByRegistry, _ := args["_eliza_approved"].(bool); !approvedByRegistry {
+			if t.approvalFn == nil {
+				t.recordDecision("rejected", filename, action, approvalDenied())
+				return cancelledMemoryMessage(approvalDenied()), nil
+			}
+			approval = t.approvalFn(request)
+			if !approval.Approved() {
+				t.recordDecision(approval.Status(), filename, action, approval)
+				return cancelledMemoryMessage(approval), nil
+			}
 		}
 		if err := saveMemory(filename, updated); err != nil {
 			t.recordDecision("failed", filename, action, approval)
@@ -262,14 +265,17 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 		}
 		updated := strings.Replace(existing, content, "", 1)
 		request := fmt.Sprintf("MEMORY change request\nTarget: %s\nAction: delete\nExact content to remove:\n---\n%s\n---", filename, content)
-		if t.approvalFn == nil {
-			t.recordDecision("rejected", filename, action, approvalDenied())
-			return cancelledMemoryMessage(approvalDenied()), nil
-		}
-		approval := t.approvalFn(request)
-		if !approval.Approved() {
-			t.recordDecision(approval.Status(), filename, action, approval)
-			return cancelledMemoryMessage(approval), nil
+		approval := approvalGranted()
+		if approvedByRegistry, _ := args["_eliza_approved"].(bool); !approvedByRegistry {
+			if t.approvalFn == nil {
+				t.recordDecision("rejected", filename, action, approvalDenied())
+				return cancelledMemoryMessage(approvalDenied()), nil
+			}
+			approval = t.approvalFn(request)
+			if !approval.Approved() {
+				t.recordDecision(approval.Status(), filename, action, approval)
+				return cancelledMemoryMessage(approval), nil
+			}
 		}
 		if err := saveMemory(filename, updated); err != nil {
 			t.recordDecision("failed", filename, action, approval)
@@ -280,6 +286,37 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 	default:
 		return "", fmt.Errorf("未知 memory action %q", action)
 	}
+}
+
+func (t *MemoryTool) ValidateArgs(args map[string]any) error {
+	action, _ := args["action"].(string)
+	target, _ := args["target"].(string)
+	content, _ := args["content"].(string)
+	switch action {
+	case "recall":
+		return nil
+	case "save":
+		if !validMemoryTarget(target) || strings.TrimSpace(content) == "" {
+			return fmt.Errorf("save 需要 target=user|project|agent 和非空 content")
+		}
+	case "forget":
+		if !validMemoryTarget(target) || content == "" {
+			return fmt.Errorf("forget 需要 target 和唯一匹配 content")
+		}
+	default:
+		return fmt.Errorf("未知 memory action %q", action)
+	}
+	return nil
+}
+
+func (t *MemoryTool) AuthorizeToolCall(_ ToolCallContext, args map[string]any) error {
+	action, _ := args["action"].(string)
+	if action == "save" || action == "forget" {
+		if !t.allowWrite {
+			return fmt.Errorf("memory 修改在非交互模式下被禁止")
+		}
+	}
+	return nil
 }
 
 func (t *MemoryTool) recordDecision(status, filename, action string, approval ApprovalResult) {

@@ -176,17 +176,20 @@ func runMain(args []string) int {
 	registry.confirmFn = func(command string) ApprovalResult {
 		return agent.approvalLoop(fmt.Sprintf("Dangerous command: %s", command))
 	}
-	registry.Register(&ReadFileTool{policy: filePolicy})
-	registry.Register(&WriteFileTool{policy: filePolicy})
-	registry.Register(&RunCommandTool{policy: commandPolicy, confirmFn: registry.confirmFn, timeout: time.Duration(cfg.Command.TimeoutSeconds) * time.Second, maxOutputBytes: cfg.Command.MaxOutputBytes})
-	registry.Register(&SkillListTool{})
-	registry.Register(&SkillViewTool{})
-	registry.Register(&MemoryTool{approvalFn: agent.approvalLoop, allowWrite: opts.Query == "", worklog: agent.worklog})
-	registry.Register(NewViewImageTool(
-		getEnvWithDefault("ELIZA_VISION_BASE_URL", ""),
-		getEnvWithDefault("ELIZA_VISION_API_KEY", ""),
-		getEnvWithDefault("ELIZA_VISION_MODEL", ""),
-	))
+	registry.RegisterMany(
+		&ReadFileTool{policy: filePolicy},
+		&WriteFileTool{policy: filePolicy},
+		&RunCommandTool{policy: commandPolicy, confirmFn: registry.confirmFn, timeout: time.Duration(cfg.Command.TimeoutSeconds) * time.Second, maxOutputBytes: cfg.Command.MaxOutputBytes},
+		&SkillListTool{},
+		&SkillViewTool{},
+		&MemoryTool{approvalFn: agent.approvalLoop, allowWrite: opts.Query == "", worklog: agent.worklog},
+		NewViewImageTool(
+			getEnvWithDefault("ELIZA_VISION_BASE_URL", ""),
+			getEnvWithDefault("ELIZA_VISION_API_KEY", ""),
+			getEnvWithDefault("ELIZA_VISION_MODEL", ""),
+			filePolicy,
+		),
+	)
 	registerBrowserTools(registry, cfg.Plugins.Browser, filePolicy)
 	configureSkills(cfg.Skills, agent.worklog)
 	scanSkills()

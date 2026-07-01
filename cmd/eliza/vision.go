@@ -32,9 +32,10 @@ type ViewImageTool struct {
 	apiKey  string
 	model   string
 	client  *http.Client
+	policy  *FilePolicy
 }
 
-func NewViewImageTool(baseURL, apiKey, model string) *ViewImageTool {
+func NewViewImageTool(baseURL, apiKey, model string, policies ...*FilePolicy) *ViewImageTool {
 	if baseURL == "" {
 		baseURL = os.Getenv("ELIZA_BASE_URL")
 	}
@@ -44,10 +45,15 @@ func NewViewImageTool(baseURL, apiKey, model string) *ViewImageTool {
 	if model == "" {
 		model = os.Getenv("ELIZA_MODEL")
 	}
+	var policy *FilePolicy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	return &ViewImageTool{
 		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		apiKey:  strings.TrimSpace(apiKey),
 		model:   strings.TrimSpace(model),
+		policy:  policy,
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -96,7 +102,13 @@ func (t *ViewImageTool) ExecuteContext(ctx context.Context, args map[string]any)
 		prompt = "请描述这张图片的内容"
 	}
 
-	// Read file (no FilePolicy — view_image uses its own MIME check)
+	if t.policy != nil {
+		resolved, err := t.policy.ResolveRead(path)
+		if err != nil {
+			return "", err
+		}
+		path = resolved
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("读取图片失败: %w", err)
@@ -120,6 +132,15 @@ func (t *ViewImageTool) ExecuteContext(ctx context.Context, args map[string]any)
 	return t.callOpenAI(ctx, b64, mime, prompt)
 }
 
+func (t *ViewImageTool) AuthorizeToolCall(_ ToolCallContext, args map[string]any) error {
+	if t.policy == nil {
+		return nil
+	}
+	path, _ := args["path"].(string)
+	_, err := t.policy.ResolveRead(path)
+	return err
+}
+
 // ─── Backend detection ──────────────────────────────────────────────
 
 func isGemini(baseURL string) bool {
@@ -139,9 +160,9 @@ type openaiVisionMessage struct {
 }
 
 type openaiVisionContent struct {
-	Type     string             `json:"type"`
-	Text     string             `json:"text,omitempty"`
-	ImageURL *openaiImageURL    `json:"image_url,omitempty"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *openaiImageURL `json:"image_url,omitempty"`
 }
 
 type openaiImageURL struct {
@@ -212,7 +233,7 @@ type geminiContent struct {
 }
 
 type geminiPart struct {
-	Text       string          `json:"text,omitempty"`
+	Text       string            `json:"text,omitempty"`
 	InlineData *geminiInlineData `json:"inline_data,omitempty"`
 }
 

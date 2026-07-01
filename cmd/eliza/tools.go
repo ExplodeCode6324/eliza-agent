@@ -43,6 +43,76 @@ type ContextTool interface {
 	ExecuteContext(context.Context, map[string]any) (string, error)
 }
 
+type ToolProfile string
+
+const (
+	ToolProfileMinimalReadonly ToolProfile = "minimal_readonly"
+	ToolProfileCodeReview      ToolProfile = "code_review"
+	ToolProfileOps             ToolProfile = "ops"
+	ToolProfileBrowserEnhanced ToolProfile = "browser_enhanced"
+)
+
+type ToolApprovalPolicy string
+
+const (
+	ToolApprovalNever            ToolApprovalPolicy = "never"
+	ToolApprovalAlways           ToolApprovalPolicy = "always"
+	ToolApprovalDangerousCommand ToolApprovalPolicy = "dangerous_command"
+	ToolApprovalMemoryMutation   ToolApprovalPolicy = "memory_mutation"
+)
+
+type ToolSpec struct {
+	Name        string
+	Category    string
+	Readonly    bool
+	Profiles    []ToolProfile
+	Approval    ToolApprovalPolicy
+	Description string
+}
+
+type ToolCallContext struct {
+	Mode string
+	Role string
+}
+
+type ToolApprovalRequest struct {
+	Required bool
+	Prompt   string
+	Reason   string
+}
+
+type ToolExecutionResult struct {
+	Name    string
+	Args    map[string]any
+	Output  string
+	Err     error
+	Elapsed time.Duration
+}
+
+type ToolSpecProvider interface {
+	ToolSpec() ToolSpec
+}
+
+type ToolArgumentValidator interface {
+	ValidateArgs(map[string]any) error
+}
+
+type ToolAuthorizer interface {
+	AuthorizeToolCall(ToolCallContext, map[string]any) error
+}
+
+type ToolApprovalRequester interface {
+	ApprovalRequest(ToolCallContext, map[string]any) (ToolApprovalRequest, bool)
+}
+
+type ToolResultFormatter interface {
+	FormatToolResult(ToolExecutionResult) string
+}
+
+type ToolAuditContextSetter interface {
+	SetAuditContext(requestID, toolCallID string)
+}
+
 // ─── 命令策略 ─────────────────────────────────────────────────────
 
 const (
@@ -262,8 +332,14 @@ func validateReadonlyArguments(executable string, args []string) error {
 
 // ─── 工具注册表 ───────────────────────────────────────────────────
 
+type registeredTool struct {
+	tool Tool
+	spec ToolSpec
+}
+
 type ToolRegistry struct {
-	tools     map[string]Tool
+	tools     map[string]registeredTool
+	order     []string
 	policy    *CommandPolicy
 	confirmFn func(string) ApprovalResult
 	mu        sync.RWMutex
@@ -272,7 +348,7 @@ type ToolRegistry struct {
 
 func NewToolRegistry(policy *CommandPolicy) *ToolRegistry {
 	return &ToolRegistry{
-		tools:     make(map[string]Tool),
+		tools:     make(map[string]registeredTool),
 		policy:    policy,
 		confirmFn: defaultConfirm,
 		role:      "default",
@@ -280,31 +356,81 @@ func NewToolRegistry(policy *CommandPolicy) *ToolRegistry {
 }
 
 func (r *ToolRegistry) Register(t Tool) {
+	if t == nil {
+		panic("cannot register nil tool")
+	}
 	def := t.Definition()
-	r.tools[def.Function.Name] = t
+	name := strings.TrimSpace(def.Function.Name)
+	if name == "" {
+		panic("cannot register tool without function name")
+	}
+	spec := specForTool(t, def)
+	if spec.Name == "" {
+		spec.Name = name
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.tools[name]; !ok {
+		r.order = append(r.order, name)
+	}
+	r.tools[name] = registeredTool{tool: t, spec: spec}
+}
+
+func (r *ToolRegistry) RegisterMany(tools ...Tool) {
+	for _, tool := range tools {
+		r.Register(tool)
+	}
 }
 
 func (r *ToolRegistry) Get(name string) (Tool, bool) {
-	t, ok := r.tools[name]
-	return t, ok
+	entry, ok := r.lookup(name)
+	if !ok {
+		return nil, false
+	}
+	return entry.tool, true
 }
 
 func (r *ToolRegistry) Definitions() []ToolDef {
-	defs := make([]ToolDef, 0, len(r.tools))
-	for name, t := range r.tools {
-		if !r.ToolAllowed(name) {
+	entries := r.entries()
+	defs := make([]ToolDef, 0, len(entries))
+	for _, entry := range entries {
+		if !r.ToolAllowed(entry.spec.Name) {
 			continue
 		}
-		defs = append(defs, t.Definition())
+		defs = append(defs, entry.tool.Definition())
 	}
 	return defs
 }
 
+func (r *ToolRegistry) ToolNames() []string {
+	entries := r.entries()
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.spec.Name)
+	}
+	return names
+}
+
+func (r *ToolRegistry) ToolSpec(name string) (ToolSpec, bool) {
+	entry, ok := r.lookup(name)
+	if !ok {
+		return ToolSpec{}, false
+	}
+	return entry.spec, true
+}
+
 func (r *ToolRegistry) Mode() string {
+	if r.policy == nil {
+		return ModeReadonly
+	}
 	return r.policy.Mode()
 }
 
 func (r *ToolRegistry) SetMode(mode string) error {
+	if r.policy == nil {
+		return fmt.Errorf("command policy is not configured")
+	}
 	return r.policy.SetMode(mode)
 }
 
@@ -314,58 +440,410 @@ func (r *ToolRegistry) ToolAllowed(name string) bool {
 }
 
 func (r *ToolRegistry) ToolAllowedReason(name string) (bool, string) {
-	r.mu.RLock()
-	role := r.role
-	r.mu.RUnlock()
-	if allowed, reason := roleToolAllowed(role, name); !allowed {
+	entry, ok := r.lookup(name)
+	if !ok {
+		return false, "tool is not registered"
+	}
+	ctx := r.callContext()
+	if allowed, reason := roleToolAllowed(ctx.Role, name); !allowed {
 		return false, reason
 	}
-	if r.Mode() == ModeReadonly && name == "write_file" {
-		return false, "readonly mode disables write_file"
+	if ctx.Mode == ModeReadonly && !entry.spec.Readonly {
+		return false, "readonly mode disables mutating or interactive tools"
 	}
-	if r.Mode() == ModeReadonly && isBrowserAutopilotOnlyTool(name) {
-		return false, "readonly mode disables browser interaction tools"
-	}
-	if roleDef, ok := builtinRoles[role]; ok && roleDef.ForceReadonly && name == "write_file" {
+	if roleDef, ok := builtinRoles[ctx.Role]; ok && roleDef.ForceReadonly && !entry.spec.Readonly {
 		return false, "role forces readonly"
 	}
 	return true, ""
 }
 
+func (r *ToolRegistry) ValidateCall(name string, args map[string]any) error {
+	entry, ok := r.lookup(name)
+	if !ok {
+		return fmt.Errorf("unknown tool %q", name)
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	if err := validateToolArguments(entry.tool.Definition(), args); err != nil {
+		return err
+	}
+	if validator, ok := entry.tool.(ToolArgumentValidator); ok {
+		if err := validator.ValidateArgs(args); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *ToolRegistry) AuthorizeCall(name string, args map[string]any) error {
+	entry, ok := r.lookup(name)
+	if !ok {
+		return fmt.Errorf("unknown tool %q", name)
+	}
+	if err := r.ValidateCall(name, args); err != nil {
+		return fmt.Errorf("tool arguments invalid: %w", err)
+	}
 	if allowed, reason := r.ToolAllowedReason(name); !allowed {
 		return fmt.Errorf("tool policy denied: %s", reason)
 	}
-	r.mu.RLock()
-	role := r.role
-	r.mu.RUnlock()
+	ctx := r.callContext()
 	if name == "run_command" {
 		command, _ := args["command"].(string)
+		if r.policy == nil {
+			return fmt.Errorf("command policy is not configured")
+		}
 		if _, err := r.policy.AuthorizeCommand(command); err != nil {
 			return fmt.Errorf("command policy denied: %w", err)
 		}
-		if roleDef, ok := builtinRoles[role]; ok && roleDef.ForceReadonly {
+		if roleDef, ok := builtinRoles[ctx.Role]; ok && roleDef.ForceReadonly {
 			if err := r.policy.validateReadonly(command); err != nil {
-				return fmt.Errorf("role %s forced-readonly policy denied command: %w", role, err)
+				return fmt.Errorf("role %s forced-readonly policy denied command: %w", ctx.Role, err)
 			}
+		}
+	}
+	if authorizer, ok := entry.tool.(ToolAuthorizer); ok {
+		if err := authorizer.AuthorizeToolCall(ctx, args); err != nil {
+			return fmt.Errorf("tool policy denied: %w", err)
 		}
 	}
 	return nil
 }
 
 func (r *ToolRegistry) RequiresApproval(name string, args map[string]any) bool {
+	request, ok := r.ApprovalRequest(name, args)
+	return ok && request.Required
+}
+
+func (r *ToolRegistry) ApprovalRequest(name string, args map[string]any) (ToolApprovalRequest, bool) {
+	entry, ok := r.lookup(name)
+	if !ok {
+		return ToolApprovalRequest{}, false
+	}
+	ctx := r.callContext()
+	if requester, ok := entry.tool.(ToolApprovalRequester); ok {
+		if request, handled := requester.ApprovalRequest(ctx, args); handled {
+			return request, true
+		}
+	}
+
+	switch entry.spec.Approval {
+	case ToolApprovalAlways:
+		return ToolApprovalRequest{Required: true, Prompt: defaultApprovalPrompt(name, args), Reason: "tool requires one-time approval"}, true
+	case ToolApprovalDangerousCommand:
+		if ctx.Mode != ModeAutopilot || r.policy == nil {
+			return ToolApprovalRequest{}, true
+		}
+		command, _ := args["command"].(string)
+		required, err := r.policy.AuthorizeCommand(command)
+		if err != nil || !required {
+			return ToolApprovalRequest{}, true
+		}
+		return ToolApprovalRequest{Required: true, Prompt: defaultApprovalPrompt(name, args), Reason: "dangerous command"}, true
+	case ToolApprovalMemoryMutation:
+		action, _ := args["action"].(string)
+		if action != "save" && action != "forget" {
+			return ToolApprovalRequest{}, true
+		}
+		return ToolApprovalRequest{Required: true, Prompt: defaultApprovalPrompt(name, args), Reason: "memory mutation"}, true
+	default:
+		return ToolApprovalRequest{}, true
+	}
+}
+
+func (r *ToolRegistry) ExecuteContext(ctx context.Context, requestID string, call ToolCall, args map[string]any) (string, error) {
+	entry, ok := r.lookup(call.Func.Name)
+	if !ok {
+		return "", fmt.Errorf("unknown tool %q", call.Func.Name)
+	}
+	if setter, ok := entry.tool.(ToolAuditContextSetter); ok {
+		setter.SetAuditContext(requestID, call.ID)
+	}
+	if contextual, ok := entry.tool.(ContextTool); ok {
+		return contextual.ExecuteContext(ctx, args)
+	}
+	return entry.tool.Execute(args)
+}
+
+func (r *ToolRegistry) FormatResult(result ToolExecutionResult) string {
+	entry, ok := r.lookup(result.Name)
+	if ok {
+		if formatter, ok := entry.tool.(ToolResultFormatter); ok {
+			return formatter.FormatToolResult(result)
+		}
+	}
+	if result.Err != nil {
+		return "错误: " + result.Err.Error()
+	}
+	return result.Output
+}
+
+func (r *ToolRegistry) StartEventPayload(name string, args map[string]any, approvalRequired bool) map[string]any {
+	payload := map[string]any{
+		"name":              name,
+		"arguments":         summarizeArguments(args),
+		"approval_required": approvalRequired,
+	}
+	if spec, ok := r.ToolSpec(name); ok {
+		payload["tool"] = map[string]any{
+			"category": spec.Category,
+			"readonly": spec.Readonly,
+			"approval": string(spec.Approval),
+			"profiles": toolProfileStrings(spec.Profiles),
+		}
+	}
+	return payload
+}
+
+func (r *ToolRegistry) entries() []registeredTool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entries := make([]registeredTool, 0, len(r.order))
+	for _, name := range r.order {
+		if entry, ok := r.tools[name]; ok {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
+func (r *ToolRegistry) lookup(name string) (registeredTool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.tools[name]
+	return entry, ok
+}
+
+func (r *ToolRegistry) callContext() ToolCallContext {
 	r.mu.RLock()
 	role := r.role
 	r.mu.RUnlock()
-	if role == "writer" && name == "write_file" {
-		return true
+	if role == "" {
+		role = "default"
 	}
-	if name != "run_command" || r.Mode() != ModeAutopilot {
+	return ToolCallContext{Mode: r.Mode(), Role: role}
+}
+
+func specForTool(tool Tool, def ToolDef) ToolSpec {
+	if provider, ok := tool.(ToolSpecProvider); ok {
+		spec := provider.ToolSpec()
+		if spec.Description == "" {
+			spec.Description = def.Function.Description
+		}
+		return spec
+	}
+	spec := defaultToolSpec(def.Function.Name)
+	if spec.Description == "" {
+		spec.Description = def.Function.Description
+	}
+	return spec
+}
+
+func defaultToolSpec(name string) ToolSpec {
+	switch name {
+	case "read_file":
+		return ToolSpec{Name: name, Category: "file", Readonly: true, Approval: ToolApprovalNever, Profiles: toolProfiles(ToolProfileMinimalReadonly, ToolProfileCodeReview, ToolProfileOps, ToolProfileBrowserEnhanced)}
+	case "write_file":
+		return ToolSpec{Name: name, Category: "file", Readonly: false, Approval: ToolApprovalAlways, Profiles: toolProfiles(ToolProfileCodeReview, ToolProfileOps)}
+	case "run_command":
+		return ToolSpec{Name: name, Category: "command", Readonly: true, Approval: ToolApprovalDangerousCommand, Profiles: toolProfiles(ToolProfileCodeReview, ToolProfileOps)}
+	case "skill_list", "skill_view":
+		return ToolSpec{Name: name, Category: "skill", Readonly: true, Approval: ToolApprovalNever, Profiles: toolProfiles(ToolProfileMinimalReadonly, ToolProfileCodeReview, ToolProfileOps, ToolProfileBrowserEnhanced)}
+	case "memory":
+		return ToolSpec{Name: name, Category: "memory", Readonly: true, Approval: ToolApprovalMemoryMutation, Profiles: toolProfiles(ToolProfileMinimalReadonly, ToolProfileCodeReview, ToolProfileOps, ToolProfileBrowserEnhanced)}
+	case "view_image":
+		return ToolSpec{Name: name, Category: "vision", Readonly: true, Approval: ToolApprovalNever, Profiles: toolProfiles(ToolProfileCodeReview, ToolProfileOps, ToolProfileBrowserEnhanced)}
+	case "browser_open", "browser_snapshot", "browser_reset":
+		return ToolSpec{Name: name, Category: "browser", Readonly: true, Approval: ToolApprovalNever, Profiles: toolProfiles(ToolProfileBrowserEnhanced)}
+	case "browser_click", "browser_type", "browser_screenshot":
+		return ToolSpec{Name: name, Category: "browser", Readonly: false, Approval: ToolApprovalNever, Profiles: toolProfiles(ToolProfileBrowserEnhanced)}
+	default:
+		return ToolSpec{Name: name, Category: "custom", Readonly: false, Approval: ToolApprovalNever}
+	}
+}
+
+func toolProfiles(profiles ...ToolProfile) []ToolProfile {
+	result := make([]ToolProfile, len(profiles))
+	copy(result, profiles)
+	return result
+}
+
+func toolProfileStrings(profiles []ToolProfile) []string {
+	result := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		result = append(result, string(profile))
+	}
+	return result
+}
+
+func defaultApprovalPrompt(name string, args map[string]any) string {
+	switch name {
+	case "run_command":
+		command, _ := args["command"].(string)
+		return "Dangerous command: " + command
+	case "write_file":
+		path, _ := args["path"].(string)
+		content, _ := args["content"].(string)
+		return fmt.Sprintf("WRITE_FILE write %s (%d bytes)", path, len(content))
+	case "memory":
+		action, _ := args["action"].(string)
+		target, _ := args["target"].(string)
+		content, _ := args["content"].(string)
+		filename := target
+		if filename != "" {
+			filename += ".md"
+		}
+		verb := "change"
+		if action == "save" {
+			verb = "append"
+		} else if action == "forget" {
+			verb = "delete"
+		}
+		return fmt.Sprintf("MEMORY change request\nTarget: %s\nAction: %s\nExact content:\n---\n%s\n---", filename, verb, strings.TrimSpace(content))
+	default:
+		return "Tool call requires approval: " + name
+	}
+}
+
+func validateToolArguments(def ToolDef, args map[string]any) error {
+	parameters := def.Function.Parameters
+	if parameters == nil {
+		parameters = map[string]any{}
+	}
+	for _, name := range requiredToolFields(parameters) {
+		if value, ok := args[name]; !ok || value == nil {
+			return fmt.Errorf("缺少 %s 参数", name)
+		}
+	}
+	properties, _ := parameters["properties"].(map[string]any)
+	for name, value := range args {
+		if strings.HasPrefix(name, "_eliza_") {
+			continue
+		}
+		property, ok := properties[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		if err := validateToolArgumentType(name, value, property); err != nil {
+			return err
+		}
+		if err := validateToolArgumentEnum(name, value, property); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requiredToolFields(parameters map[string]any) []string {
+	value, ok := parameters["required"]
+	if !ok {
+		return nil
+	}
+	switch required := value.(type) {
+	case []string:
+		result := make([]string, len(required))
+		copy(result, required)
+		return result
+	case []any:
+		result := make([]string, 0, len(required))
+		for _, item := range required {
+			if name, ok := item.(string); ok && name != "" {
+				result = append(result, name)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func validateToolArgumentType(name string, value any, property map[string]any) error {
+	kind, _ := property["type"].(string)
+	if kind == "" || value == nil {
+		return nil
+	}
+	switch kind {
+	case "string":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("%s 必须是字符串", name)
+		}
+	case "integer":
+		if !toolValueIsInteger(value) {
+			return fmt.Errorf("%s 必须是整数", name)
+		}
+	case "number":
+		if !toolValueIsNumber(value) {
+			return fmt.Errorf("%s 必须是数字", name)
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("%s 必须是布尔值", name)
+		}
+	case "object":
+		if _, ok := value.(map[string]any); !ok {
+			return fmt.Errorf("%s 必须是对象", name)
+		}
+	case "array":
+		if _, ok := value.([]any); !ok {
+			return fmt.Errorf("%s 必须是数组", name)
+		}
+	}
+	return nil
+}
+
+func validateToolArgumentEnum(name string, value any, property map[string]any) error {
+	raw, ok := property["enum"]
+	if !ok {
+		return nil
+	}
+	var values []any
+	switch enum := raw.(type) {
+	case []any:
+		values = enum
+	case []string:
+		values = make([]any, 0, len(enum))
+		for _, item := range enum {
+			values = append(values, item)
+		}
+	default:
+		return nil
+	}
+	for _, candidate := range values {
+		if fmt.Sprint(candidate) == fmt.Sprint(value) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s 必须是枚举值之一: %s", name, joinEnumValues(values))
+}
+
+func joinEnumValues(values []any) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprint(value))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func toolValueIsInteger(value any) bool {
+	switch number := value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return true
+	case float32:
+		return float32(int64(number)) == number
+	case float64:
+		return float64(int64(number)) == number
+	default:
 		return false
 	}
-	command, _ := args["command"].(string)
-	required, err := r.policy.AuthorizeCommand(command)
-	return err == nil && required
+}
+
+func toolValueIsNumber(value any) bool {
+	switch value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *ToolRegistry) SetRole(role string) error {
@@ -781,6 +1259,26 @@ func (t *ReadFileTool) Execute(args map[string]any) (string, error) {
 	return content, nil
 }
 
+func (t *ReadFileTool) AuthorizeToolCall(_ ToolCallContext, args map[string]any) error {
+	path, _ := args["path"].(string)
+	if _, err := t.policy.ResolveRead(path); err != nil {
+		return err
+	}
+	offset, err := integerToolArg(args, "offset", 0)
+	if err != nil {
+		return err
+	}
+	if offset < 0 {
+		return fmt.Errorf("offset 不能为负数")
+	}
+	requestedLimit, err := integerToolArg(args, "limit", 10000)
+	if err != nil {
+		return err
+	}
+	_, _, err = t.policy.AllowedReadBytes(requestedLimit)
+	return err
+}
+
 func integerToolArg(args map[string]any, name string, defaultValue int64) (int64, error) {
 	value, ok := args[name]
 	if !ok {
@@ -860,6 +1358,12 @@ func (t *WriteFileTool) Execute(args map[string]any) (string, error) {
 	return fmt.Sprintf("成功写入 %s (%d 字节)", resolvedPath, info.Size()), nil
 }
 
+func (t *WriteFileTool) AuthorizeToolCall(_ ToolCallContext, args map[string]any) error {
+	path, _ := args["path"].(string)
+	_, err := t.policy.ResolveWrite(path)
+	return err
+}
+
 // ─── run_command ──────────────────────────────────────────────────
 
 type RunCommandTool struct {
@@ -891,6 +1395,14 @@ func (t *RunCommandTool) Definition() ToolDef {
 			},
 		},
 	}
+}
+
+func (t *RunCommandTool) ValidateArgs(args map[string]any) error {
+	command, _ := args["command"].(string)
+	if strings.TrimSpace(command) == "" {
+		return fmt.Errorf("缺少 command 参数")
+	}
+	return nil
 }
 
 func (t *RunCommandTool) Execute(args map[string]any) (string, error) {

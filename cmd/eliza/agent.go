@@ -456,7 +456,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []
 			return ctx.Err()
 		default:
 		}
-		tool, ok := a.registry.Get(call.Func.Name)
+		_, ok := a.registry.Get(call.Func.Name)
 		if !ok {
 			message := "未知工具: " + call.Func.Name
 			a.appendToolResult(call.ID, message)
@@ -480,23 +480,17 @@ func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []
 			a.ui.Tool(call.Func.Name, "BLOCKED", 0, "", false)
 			continue
 		}
-		if a.registry.RequiresApproval(call.Func.Name, args) {
-			prompt, _ := args["command"].(string)
+		approvalRequired := a.registry.RequiresApproval(call.Func.Name, args)
+		if approvalRequired {
+			request, _ := a.registry.ApprovalRequest(call.Func.Name, args)
 			approval := approvalDenied()
-			if !a.interactive {
-				approval = approvalDenied()
-			} else if call.Func.Name == "write_file" {
-				path, _ := args["path"].(string)
-				content, _ := args["content"].(string)
-				prompt = fmt.Sprintf("WRITE_FILE write %s (%d bytes)", path, len(content))
-				approval = a.approvalLoop(prompt)
-			} else {
-				approval = a.approvalLoop(fmt.Sprintf("Dangerous command: %s", prompt))
+			if a.interactive {
+				approval = a.approvalLoop(request.Prompt)
 			}
 			if approval.Approved() {
 				args["_eliza_approved"] = true
 			}
-			payload := map[string]any{"tool": call.Func.Name, "approved": approval.Approved()}
+			payload := map[string]any{"tool": call.Func.Name, "approved": approval.Approved(), "reason": request.Reason}
 			if strings.TrimSpace(approval.Guidance) != "" {
 				payload["guidance"] = approval.Guidance
 			}
@@ -509,19 +503,11 @@ func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []
 				continue
 			}
 		}
-		_ = a.worklog.RecordEvent("tool.started", "running", requestID, call.ID, map[string]any{"name": call.Func.Name, "arguments": summarizeArguments(args)})
-		if memory, ok := tool.(*MemoryTool); ok {
-			memory.SetAuditContext(requestID, call.ID)
-		}
+		_ = a.worklog.RecordEvent("tool.started", "running", requestID, call.ID, a.registry.StartEventPayload(call.Func.Name, args, approvalRequired))
 		started := time.Now()
-		var output string
-		var err error
-		if contextual, ok := tool.(ContextTool); ok {
-			output, err = contextual.ExecuteContext(ctx, args)
-		} else {
-			output, err = tool.Execute(args)
-		}
+		rawOutput, err := a.registry.ExecuteContext(ctx, requestID, call, args)
 		elapsed := time.Since(started)
+		output := a.registry.FormatResult(ToolExecutionResult{Name: call.Func.Name, Args: args, Output: rawOutput, Err: err, Elapsed: elapsed})
 		status := "completed"
 		if ctx.Err() != nil {
 			status = "cancelled"
@@ -533,9 +519,6 @@ func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []
 			status = "denied"
 		} else if strings.Contains(output, "[timeout=") {
 			status = "failed"
-		}
-		if err != nil {
-			output = "错误: " + err.Error()
 		}
 		loggedOutput := output
 		output = truncateToolOutput(call.Func.Name, output)
@@ -731,10 +714,7 @@ func (a *Agent) switchMode(mode string) error {
 }
 func (a *Agent) showTools() {
 	a.ui.Title(fmt.Sprintf("工具 (mode=%s role=%s)", a.registry.Mode(), a.roleName))
-	names := make([]string, 0, len(a.registry.tools))
-	for name := range a.registry.tools {
-		names = append(names, name)
-	}
+	names := a.registry.ToolNames()
 	sort.Strings(names)
 	a.ui.Output(func(w io.Writer) {
 		for _, name := range names {
