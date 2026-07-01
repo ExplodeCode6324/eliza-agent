@@ -450,25 +450,27 @@ func (a *Agent) executeToolCalls(ctx context.Context, requestID string, calls []
 		}
 		if a.registry.RequiresApproval(call.Func.Name, args) {
 			prompt, _ := args["command"].(string)
-			approved := false
+			approval := approvalDenied()
 			if !a.interactive {
-				approved = false
+				approval = approvalDenied()
 			} else if call.Func.Name == "write_file" {
 				path, _ := args["path"].(string)
 				content, _ := args["content"].(string)
 				prompt = fmt.Sprintf("WRITE_FILE 写入 %s (%d 字节)", path, len(content))
-				approved = a.approvalLoop(prompt)
+				approval = a.approvalLoop(prompt)
 			} else {
-				approved = a.approvalLoop(fmt.Sprintf("危险命令: %s", prompt))
+				approval = a.approvalLoop(fmt.Sprintf("危险命令: %s", prompt))
 			}
-			decision := "rejected"
-			if approved {
-				decision = "approved"
+			if approval.Approved() {
 				args["_eliza_approved"] = true
 			}
-			_ = a.worklog.RecordEvent("policy.approval", decision, requestID, call.ID, map[string]any{"tool": call.Func.Name, "approved": approved})
-			if !approved {
-				message := "CANCELLED: 用户拒绝了需要审批的工具调用"
+			payload := map[string]any{"tool": call.Func.Name, "approved": approval.Approved()}
+			if strings.TrimSpace(approval.Guidance) != "" {
+				payload["guidance"] = approval.Guidance
+			}
+			_ = a.worklog.RecordEvent("policy.approval", approval.Status(), requestID, call.ID, payload)
+			if !approval.Approved() {
+				message := cancelledApprovalMessage(approval)
 				a.appendToolResult(call.ID, message)
 				a.worklog.RecordTool(requestID, call, args, message, nil, 0, "cancelled")
 				a.ui.Tool(call.Func.Name, "CANCELLED", 0, "", false)
@@ -716,34 +718,46 @@ func editDistance(a, b string) int {
 	return row[len(right)]
 }
 
-// approvalLoop blocks until the user types /approve or /deny.
+// approvalLoop blocks until the user chooses an approval option.
 // Used for run_command dangerous commands, write_file, and memory modifications.
-// Non-interactive mode (e.g. -q flag) always returns false.
-func (a *Agent) approvalLoop(prompt string) bool {
+// Non-interactive mode (e.g. -q flag) always rejects.
+func (a *Agent) approvalLoop(prompt string) ApprovalResult {
 	if !a.interactive {
-		return false
+		return approvalDenied()
 	}
-	a.ui.Status("BLOCKED", "%s", prompt)
-	a.ui.Status("BLOCKED", "输入 /approve 或 /deny")
+	selected, err := readApprovalChoice(func(selected int) int {
+		return a.ui.ApprovalBox(prompt, selected)
+	}, len(approvalOptions))
+	if err != nil {
+		a.ui.Status("WARN", "审批输入不可用，已拒绝: %s", prompt)
+		return approvalDenied()
+	}
+	result := a.approvalResultFromSelection(selected)
+	if result.Approved() {
+		a.ui.Status("PASS", "已批准: %s", prompt)
+		return result
+	}
+	a.ui.Status("WARN", "已拒绝: %s", prompt)
+	if strings.TrimSpace(result.Guidance) != "" {
+		a.ui.Status("WARN", "已记录补充要求")
+	}
+	return result
+}
 
-	for {
+func (a *Agent) approvalResultFromSelection(selected int) ApprovalResult {
+	switch selected {
+	case 1:
+		return approvalGranted()
+	case 2:
+		a.ui.Status("BLOCKED", "请输入希望 ELIZA 改怎么做（留空则仅拒绝）")
+		a.ui.Prompt(a.registry.Mode(), a.roleName)
 		line, err := readTerminalLine()
 		if err != nil && line == "" {
-			return false
+			return approvalDenied()
 		}
-		line = strings.TrimSpace(line)
-		switch strings.ToLower(line) {
-		case "/approve":
-			a.ui.Status("PASS", "已批准: %s", prompt)
-			return true
-		case "/deny":
-			a.ui.Status("WARN", "已拒绝: %s", prompt)
-			return false
-		case "":
-			continue
-		default:
-			a.ui.Status("WARN", "未知审批指令 %q，输入 /approve 或 /deny", line)
-		}
+		return approvalGuidance(line)
+	default:
+		return approvalDenied()
 	}
 }
 

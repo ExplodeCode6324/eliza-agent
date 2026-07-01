@@ -120,3 +120,21 @@ func TestVeryNarrowBannerOmitsArtWithoutOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestApprovalBoxFramesOptionsWithoutSlashCommands(t *testing.T) {
+	var output bytes.Buffer
+	renderer := &Renderer{out: &output, err: &output, color: false, unicode: true, width: 72}
+
+	lines := renderer.ApprovalBox("危险命令: rm file.txt", 2)
+	text := output.String()
+
+	if lines < 8 || !strings.Contains(text, "╭") || !strings.Contains(text, "╰") {
+		t.Fatalf("approval prompt was not framed as a box: lines=%d text=%q", lines, text)
+	}
+	if !strings.Contains(text, "审批请求") || !strings.Contains(text, "> 拒绝，并告诉 ELIZA 应该怎么做") {
+		t.Fatalf("approval prompt is missing title or guidance option: %q", text)
+	}
+	if strings.Contains(text, "/approve") || strings.Contains(text, "/deny") {
+		t.Fatalf("approval prompt still references slash commands: %q", text)
+	}
+}

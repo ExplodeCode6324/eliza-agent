@@ -175,7 +175,7 @@ func buildMemoryPrompt(cfg *Config, worklog *WorklogBuilder) string {
 }
 
 type MemoryTool struct {
-	confirmFn  func(string) bool
+	approvalFn func(string) ApprovalResult
 	allowWrite bool
 	worklog    *WorklogBuilder
 	requestID  string
@@ -232,16 +232,21 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 			updated += "\n"
 		}
 		updated += "\n" + strings.TrimSpace(content) + "\n"
-		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: append\n精确新增内容:\n---\n%s\n---\n批准本次修改? [/approve OR /deny]", filename, strings.TrimSpace(content))
-		if t.confirmFn == nil || !t.confirmFn(request) {
-			t.recordDecision("rejected", filename, action)
-			return "用户拒绝或取消了 memory 修改；文件未变化。", nil
+		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: append\n精确新增内容:\n---\n%s\n---", filename, strings.TrimSpace(content))
+		if t.approvalFn == nil {
+			t.recordDecision("rejected", filename, action, approvalDenied())
+			return cancelledMemoryMessage(approvalDenied()), nil
+		}
+		approval := t.approvalFn(request)
+		if !approval.Approved() {
+			t.recordDecision(approval.Status(), filename, action, approval)
+			return cancelledMemoryMessage(approval), nil
 		}
 		if err := saveMemory(filename, updated); err != nil {
-			t.recordDecision("failed", filename, action)
+			t.recordDecision("failed", filename, action, approval)
 			return "", err
 		}
-		t.recordDecision("completed", filename, action)
+		t.recordDecision("completed", filename, action, approval)
 		return fmt.Sprintf("已写入 %s（本次批准已失效）", filename), nil
 	case "forget":
 		if !t.allowWrite {
@@ -256,25 +261,34 @@ func (t *MemoryTool) Execute(args map[string]any) (string, error) {
 			return "", fmt.Errorf("forget 匹配必须恰好一次，当前匹配 %d 次", strings.Count(existing, content))
 		}
 		updated := strings.Replace(existing, content, "", 1)
-		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: delete\n精确删除内容:\n---\n%s\n---\n批准本次修改? [/approve OR /deny]", filename, content)
-		if t.confirmFn == nil || !t.confirmFn(request) {
-			t.recordDecision("rejected", filename, action)
-			return "用户拒绝或取消了 memory 修改；文件未变化。", nil
+		request := fmt.Sprintf("MEMORY 修改申请\n目标: %s\n操作: delete\n精确删除内容:\n---\n%s\n---", filename, content)
+		if t.approvalFn == nil {
+			t.recordDecision("rejected", filename, action, approvalDenied())
+			return cancelledMemoryMessage(approvalDenied()), nil
+		}
+		approval := t.approvalFn(request)
+		if !approval.Approved() {
+			t.recordDecision(approval.Status(), filename, action, approval)
+			return cancelledMemoryMessage(approval), nil
 		}
 		if err := saveMemory(filename, updated); err != nil {
-			t.recordDecision("failed", filename, action)
+			t.recordDecision("failed", filename, action, approval)
 			return "", err
 		}
-		t.recordDecision("completed", filename, action)
+		t.recordDecision("completed", filename, action, approval)
 		return fmt.Sprintf("已从 %s 删除精确匹配内容（本次批准已失效）", filename), nil
 	default:
 		return "", fmt.Errorf("未知 memory action %q", action)
 	}
 }
 
-func (t *MemoryTool) recordDecision(status, filename, action string) {
+func (t *MemoryTool) recordDecision(status, filename, action string, approval ApprovalResult) {
 	if t.worklog != nil {
-		_ = t.worklog.RecordEvent("memory.modified", status, t.requestID, t.toolCallID, map[string]any{"file": filename, "action": action})
+		payload := map[string]any{"file": filename, "action": action}
+		if strings.TrimSpace(approval.Guidance) != "" {
+			payload["guidance"] = approval.Guidance
+		}
+		_ = t.worklog.RecordEvent("memory.modified", status, t.requestID, t.toolCallID, payload)
 	}
 }
 

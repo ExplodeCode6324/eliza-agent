@@ -265,7 +265,7 @@ func validateReadonlyArguments(executable string, args []string) error {
 type ToolRegistry struct {
 	tools     map[string]Tool
 	policy    *CommandPolicy
-	confirmFn func(string) bool
+	confirmFn func(string) ApprovalResult
 	mu        sync.RWMutex
 	role      string
 }
@@ -864,7 +864,7 @@ func (t *WriteFileTool) Execute(args map[string]any) (string, error) {
 
 type RunCommandTool struct {
 	policy         *CommandPolicy
-	confirmFn      func(string) bool
+	confirmFn      func(string) ApprovalResult
 	timeout        time.Duration
 	maxOutputBytes int
 }
@@ -910,8 +910,14 @@ func (t *RunCommandTool) ExecuteContext(parent context.Context, args map[string]
 		return fmt.Sprintf("BLOCKED: 命令被 %s 策略阻止: %v", t.policy.Mode(), policyErr), nil
 	}
 	approvedByRegistry, _ := args["_eliza_approved"].(bool)
-	if requiresConfirm && !approvedByRegistry && !t.confirmFn(command) {
-		return "CANCELLED: 用户取消了该危险操作", nil
+	if requiresConfirm && !approvedByRegistry {
+		if t.confirmFn == nil {
+			return cancelledApprovalMessage(approvalDenied()), nil
+		}
+		result := t.confirmFn(command)
+		if !result.Approved() {
+			return cancelledApprovalMessage(result), nil
+		}
 	}
 
 	timeout := t.timeout
@@ -1009,15 +1015,17 @@ func readTerminalLine() (string, error) {
 	return readLineInput()
 }
 
-func defaultConfirm(command string) bool {
-	return defaultApproval(fmt.Sprintf("\n危险命令: %s\n确认执行? [y/N]: ", command))
+func defaultConfirm(command string) ApprovalResult {
+	return defaultApproval("危险命令: " + command)
 }
 
-func defaultApproval(prompt string) bool {
-	fmt.Fprint(os.Stderr, prompt)
-	input, err := readTerminalLine()
-	if err != nil && input == "" {
-		return false
+func defaultApproval(prompt string) ApprovalResult {
+	renderer := NewRenderer(UIConfig{})
+	selected, err := readApprovalChoice(func(selected int) int {
+		return renderer.ApprovalBox(prompt, selected)
+	}, len(approvalOptions))
+	if err != nil {
+		return approvalDenied()
 	}
-	return strings.EqualFold(strings.TrimSpace(input), "y")
+	return approvalResultFromSelection(renderer, selected)
 }

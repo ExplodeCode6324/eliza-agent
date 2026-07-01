@@ -154,6 +154,65 @@ func readLineRaw() (string, error) {
 	}
 }
 
+func readApprovalChoice(render func(int) int, optionCount int) (int, error) {
+	terminalMu.Lock()
+	defer terminalMu.Unlock()
+	if optionCount <= 0 {
+		return 0, fmt.Errorf("approval options are empty")
+	}
+	if err := enterRawTerminal(); err != nil {
+		render(0)
+		return 0, err
+	}
+	defer exitRawTerminal()
+	return readApprovalChoiceRaw(render, optionCount)
+}
+
+func readApprovalChoiceRaw(render func(int) int, optionCount int) (int, error) {
+	if optionCount <= 0 {
+		return 0, fmt.Errorf("approval options are empty")
+	}
+	selected := 0
+	renderedLines := 0
+	redraw := func() {
+		if renderedLines > 0 {
+			fmt.Fprintf(os.Stderr, "\x1b[%dA\x1b[0J", renderedLines)
+		}
+		renderedLines = render(selected)
+	}
+	redraw()
+
+	fd := os.Stdin
+	data := make([]byte, 1)
+	for {
+		n, err := fd.Read(data)
+		if err != nil || n == 0 {
+			return selected, err
+		}
+		switch data[0] {
+		case 3:
+			fmt.Fprint(os.Stderr, "\r\n")
+			return 0, nil
+		case 13, '\n':
+			fmt.Fprint(os.Stderr, "\r\n")
+			return selected, nil
+		case 27:
+			seq, ok := readEscSequence(fd)
+			if !ok {
+				continue
+			}
+			switch seq {
+			case "[A", "OA":
+				selected = (selected + optionCount - 1) % optionCount
+				redraw()
+			case "[B", "OB":
+				selected = (selected + 1) % optionCount
+				redraw()
+			}
+		}
+	}
+}
+
 func submitInputBuffer(buf []rune) (string, error) {
 	content := strings.TrimRight(string(runesToBytes(buf)), "\n")
 	if content == "" {

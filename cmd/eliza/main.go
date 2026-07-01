@@ -173,7 +173,7 @@ func runMain(args []string) int {
 	llm := NewLLMClientWithConfig(cfg.Model.BaseURL, cfg.Model.APIKey, cfg.Model.Name, llmCfg)
 	registry := NewToolRegistry(commandPolicy)
 	agent := NewAgent(cfg, llm, registry)
-	registry.confirmFn = func(command string) bool {
+	registry.confirmFn = func(command string) ApprovalResult {
 		return agent.approvalLoop(fmt.Sprintf("危险命令: %s", command))
 	}
 	registry.Register(&ReadFileTool{policy: filePolicy})
@@ -181,7 +181,7 @@ func runMain(args []string) int {
 	registry.Register(&RunCommandTool{policy: commandPolicy, confirmFn: registry.confirmFn, timeout: time.Duration(cfg.Command.TimeoutSeconds) * time.Second, maxOutputBytes: cfg.Command.MaxOutputBytes})
 	registry.Register(&SkillListTool{})
 	registry.Register(&SkillViewTool{})
-	registry.Register(&MemoryTool{confirmFn: agent.approvalLoop, allowWrite: opts.Query == "", worklog: agent.worklog})
+	registry.Register(&MemoryTool{approvalFn: agent.approvalLoop, allowWrite: opts.Query == "", worklog: agent.worklog})
 	registry.Register(NewViewImageTool(
 		getEnvWithDefault("ELIZA_VISION_BASE_URL", ""),
 		getEnvWithDefault("ELIZA_VISION_API_KEY", ""),

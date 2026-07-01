@@ -14,6 +14,7 @@ import (
 const (
 	ansiReset        = "\x1b[0m"
 	ansiDeepRed      = "\x1b[38;5;88m"
+	ansiSoftRed      = "\x1b[38;5;217m"
 	ansiPink         = "\x1b[38;5;224m"
 	ansiHair         = "\x1b[38;5;211m"
 	ansiHairDim      = "\x1b[38;5;197m"
@@ -185,6 +186,83 @@ func (r *Renderer) Confirm(prompt string) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(input), "y")
+}
+
+func (r *Renderer) ApprovalBox(prompt string, selected int) int {
+	width := r.width
+	if width <= 0 {
+		width = 80
+	}
+	if width > 96 {
+		width = 96
+	}
+	if width < 36 {
+		width = 36
+	}
+	inner := width - 4
+	lines := r.approvalBoxLines(prompt, selected, inner)
+	borderWidth := inner + 2
+	if r.plain || !r.unicode {
+		fmt.Fprintln(r.err, "+"+strings.Repeat("-", borderWidth)+"+")
+		for _, line := range lines {
+			r.approvalPlainLine(line, inner)
+		}
+		fmt.Fprintln(r.err, "+"+strings.Repeat("-", borderWidth)+"+")
+		return len(lines) + 2
+	}
+	fmt.Fprintln(r.err, r.style("╭"+strings.Repeat("─", borderWidth)+"╮", ansiSoftRed))
+	for _, line := range lines {
+		r.approvalStyledLine(line, inner)
+	}
+	fmt.Fprintln(r.err, r.style("╰"+strings.Repeat("─", borderWidth)+"╯", ansiSoftRed))
+	return len(lines) + 2
+}
+
+func (r *Renderer) approvalBoxLines(prompt string, selected int, width int) []string {
+	var lines []string
+	lines = append(lines, "审批请求")
+	lines = append(lines, strings.Repeat("─", width))
+	for _, raw := range strings.Split(prompt, "\n") {
+		raw = strings.TrimRight(raw, "\r")
+		for _, wrapped := range wrapDisplay(raw, width) {
+			lines = append(lines, wrapped)
+		}
+	}
+	lines = append(lines, strings.Repeat("─", width))
+	for index, option := range approvalOptions {
+		marker := "  "
+		if index == selected {
+			marker = "> "
+		}
+		lines = append(lines, marker+option)
+	}
+	lines = append(lines, strings.Repeat("─", width))
+	lines = append(lines, "↑/↓ 选择，Enter 确认")
+	return lines
+}
+
+func (r *Renderer) approvalPlainLine(raw string, width int) {
+	raw = truncateDisplay(raw, width)
+	padding := width - displayWidth(raw)
+	if padding < 0 {
+		padding = 0
+	}
+	fmt.Fprintln(r.err, "| "+raw+strings.Repeat(" ", padding)+" |")
+}
+
+func (r *Renderer) approvalStyledLine(raw string, width int) {
+	raw = truncateDisplay(raw, width)
+	padding := width - displayWidth(raw)
+	if padding < 0 {
+		padding = 0
+	}
+	color := ansiSoftRed
+	if strings.HasPrefix(raw, "> ") || raw == "审批请求" {
+		color = ansiWhite
+	}
+	fmt.Fprint(r.err, r.style("│ ", ansiSoftRed))
+	fmt.Fprint(r.err, r.style(raw, color)+strings.Repeat(" ", padding))
+	fmt.Fprintln(r.err, r.style(" │", ansiSoftRed))
 }
 
 // ─── Banner ────────────────────────────────────────────────────────
