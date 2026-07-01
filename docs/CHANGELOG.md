@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## v0.9.0 (2026-07-01) — 首个稳定版本
+
+- **首个稳定运行版本。** 核心架构、工具集、输入体验和安全策略已通过真实环境验证。
+- 新增无头 Chromium 浏览器：基于 chromedp，7 个浏览器工具，零外部运行时依赖。readonly 模式开放只读操作。
+- 新增可选择式审批框：↑/↓ 选择 + Enter 确认替代 /approve /deny。默认拒绝，可拒绝并提供指引。
+- 新增 view_image 视觉理解工具：Gemini / OpenAI 双后端自动检测。
+- 输入体验全面升级：bracketed paste 协议、多行粘贴折叠为临时文件、CJK 输入即时显示。
+- 统一 raw terminal 实现：用 golang.org/x/term 替代平台分叉 syscall。
+- 修复 chromedp context 派生导致浏览器连接被取消。
+- 修复审批框 ↑↓ 切换重绘错位和边框断裂。
+- 修复多行粘贴逐行发送/刷屏、中文输入法提交后不即时显示。
+- 全套文档更新：README、ARCHITECTURE、CHANGELOG、三份 fix 记录和综合 FIX.md。
+
 ## v0.8.0 (2026-07-01) — Selectable Approval Prompt
 
 - 新增可选择式审批框：↑/↓ 切换选项，Enter 确认。默认拒绝，批准只对本次操作生效。

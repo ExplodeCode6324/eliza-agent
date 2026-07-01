@@ -1,6 +1,6 @@
 # ELIZA binaries
 
-Version: v0.8.0
+Version: v0.9.0
 
 This directory stores prebuilt ELIZA Agent binaries produced by `make build-all`.
 The application version is unchanged; all files below are built from the same

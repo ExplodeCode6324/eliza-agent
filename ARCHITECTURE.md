@@ -1,6 +1,6 @@
 # ELIZA Agent 架构
 
-> 版本: v0.8.0  
+> 版本: v0.9.0  
 > 日期: 2026-06-25  
 > 目标: 内网 OpenAI-compatible API 的 Go 静态单二进制 Agent Runtime
 
