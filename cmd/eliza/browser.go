@@ -69,9 +69,6 @@ func defaultBrowserPluginConfig() BrowserPluginConfig {
 }
 
 func defaultBrowserToolsDir() string {
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, "eliza", "tools")
-	}
 	return filepath.Join(appBaseDir(), "tools")
 }
 

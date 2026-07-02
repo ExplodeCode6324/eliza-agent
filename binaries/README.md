@@ -21,7 +21,7 @@ Headless browser support is optional. Chromium is not included in this repo
 wget https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.24/linux64/chrome-headless-shell-linux64.zip
 ```
 
-On first normal startup ELIZA creates `~/eliza/tools` as the browser tools
-directory. Put Chromium or `chrome-headless-shell` under that directory, or set
-`ELIZA_BROWSER_EXEC_PATH` to a browser executable. The legacy
+On first normal startup ELIZA creates `./tools` as the browser tools
+directory. Put Chromium or `chrome-headless-shell` under that directory,
+or set `ELIZA_BROWSER_EXEC_PATH` to a browser executable. The legacy
 `./plugins/chromium` directory is still detected for compatibility.

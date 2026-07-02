@@ -31,7 +31,7 @@
 ## v0.8.0 (2026-06-30) — Headless Chromium Browser
 
 - 基于 Go chromedp 内置 7 个无头浏览器工具：`browser_open`、`browser_snapshot`、`browser_click`、`browser_type`、`browser_screenshot`、`browser_reset`。
-- 零外部运行时依赖（无需 Node/Python/Playwright）。Chromium 本体可选，解压到 `~/eliza/tools/` 即自动激活。
+- 零外部运行时依赖（无需 Node/Python/Playwright）。Chromium 本体可选，解压到二进制同目录 `tools/` 即自动激活。
 - readonly 模式允许只读浏览器操作（open/snapshot/reset），交互操作需 autopilot。
 - 修复 chromedp context.WithTimeout 派生导致启动期 browserCtx 被取消的问题；浏览器操作期保留超时和用户取消兜底，超时后重置会话。
 

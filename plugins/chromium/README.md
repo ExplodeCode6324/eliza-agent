@@ -1,6 +1,6 @@
 # Chromium compatibility directory
 
-ELIZA now prefers `~/eliza/tools` for optional headless browser assets. This
+ELIZA now prefers `./tools` alongside the binary for optional headless browser assets. This
 legacy directory is still scanned for compatibility when the binary runs from a
 repo or release bundle.
 

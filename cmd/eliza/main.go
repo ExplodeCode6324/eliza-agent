@@ -751,8 +751,8 @@ func defaultEnvContent() string {
 		"ELIZA_SKILLS_DISABLED=\n" +
 		"ELIZA_SKILL_MAX_FILE_BYTES=131072\n" +
 		"ELIZA_SKILL_MAX_INDEX_BYTES=65536\n\n" +
-		"# 无头浏览器（可选）：首次落地/手动放置到 ~/eliza/tools；也兼容二进制同目录 plugins/chromium\n" +
-		"ELIZA_BROWSER_TOOLS_DIR=~/eliza/tools\n" +
+		"# 无头浏览器（可选）：放置到二进制同目录下的 tools/；也兼容 plugins/chromium\n" +
+		"ELIZA_BROWSER_TOOLS_DIR=./tools\n" +
 		"ELIZA_BROWSER_CHROMIUM_DIR=./plugins/chromium\n" +
 		"ELIZA_BROWSER_EXEC_PATH=\n" +
 		"ELIZA_BROWSER_TIMEOUT=30\n" +
